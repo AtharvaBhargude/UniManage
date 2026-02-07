@@ -2,14 +2,14 @@ import React, { useState } from 'react';
 import { Button, Input, Select, Card } from '../components/UI.jsx';
 import { ApiService } from '../services/api.js';
 import { DEPARTMENTS, DIVISIONS } from '../constants.js';
-import { GraduationCap, Lock, ShieldCheck } from 'lucide-react';
+import logo from '../components/latestlogopccoe.png';
 
 export const AuthPage = ({ onLogin }) => {
   const [isLogin, setIsLogin] = useState(true);
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [require2FA, setRequire2FA] = useState(false);
-  
+
   const [formData, setFormData] = useState({
     username: '',
     password: '',
@@ -73,11 +73,13 @@ export const AuthPage = ({ onLogin }) => {
     <div className="auth-container">
       <Card className="auth-card">
         <div className="auth-header">
-           <div className="auth-logo">
-              {require2FA ? <ShieldCheck className="text-white" size={32} /> : <GraduationCap className="text-white" size={32} />}
-           </div>
-           <h1 className="auth-title">UniManage</h1>
-           <p className="auth-subtitle">{require2FA ? 'Security Verification' : 'Project Management System'}</p>
+          <div className="auth-logo">
+            <img src={logo} alt="App Logo" className="logo-img" />
+          </div>
+          <h1 className="auth-title">UniManage</h1>
+          <p className="auth-subtitle">
+            {require2FA ? 'Security Verification' : 'Project Management System'}
+          </p>
         </div>
 
         {!require2FA && (
@@ -97,11 +99,7 @@ export const AuthPage = ({ onLogin }) => {
           </div>
         )}
 
-        {error && (
-          <div className="auth-error">
-            {error}
-          </div>
-        )}
+        {error && <div className="auth-error">{error}</div>}
 
         <form onSubmit={handleSubmit} className="auth-form">
           {!require2FA ? (
@@ -175,7 +173,9 @@ export const AuthPage = ({ onLogin }) => {
                 className="border-indigo-500 ring-2 ring-indigo-200"
                 placeholder="Enter 2nd Step Password"
               />
-              <p className="text-xs text-gray-500 mb-2 text-center">Developer Access Verification Required</p>
+              <p className="text-xs text-gray-500 mb-2 text-center">
+                Developer Access Verification Required
+              </p>
             </div>
           )}
 
