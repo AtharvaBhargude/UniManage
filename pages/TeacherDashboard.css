@@ -113,3 +113,15 @@
   align-items: center;
   gap: 1rem;
 }
+
+.dark .force-black-text {
+  color: #000 !important;
+}
+
+.dark .force-black-label .ui-label {
+  color: #000 !important;
+}
+
+.dark .force-black-label .ui-select {
+  color: #000 !important;
+}

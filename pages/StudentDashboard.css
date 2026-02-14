@@ -44,6 +44,8 @@
   border-right: 1px solid #e5e7eb;
   display: flex;
   flex-direction: column;
+  position: relative;
+  transition: width 0.2s ease;
 }
 
 .quiz-sidebar.mobile-collapsed {
@@ -67,6 +69,55 @@
     height: 100vh;
     position: static;
   }
+
+  .quiz-sidebar.mobile-collapsed {
+    width: 2rem;
+    min-width: 2rem;
+    height: 100vh;
+    overflow: visible;
+  }
+
+  .quiz-sidebar.mobile-expanded {
+    width: 16rem;
+    min-width: 16rem;
+    height: 100vh;
+    position: static;
+    box-shadow: none;
+  }
+}
+
+.question-nav-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.question-tab-edge-toggle {
+  width: 28px;
+  height: 28px;
+  border: 1px solid #d1d5db;
+  border-radius: 9999px;
+  background: #ffffff;
+  color: #4f46e5;
+  font-weight: 700;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.question-tab-edge-toggle:hover {
+  background: #eef2ff;
+}
+
+.quiz-sidebar-collapsed-handle {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .quiz-content {
@@ -119,6 +170,15 @@
   cursor: pointer;
   transition: all 0.2s;
   margin-bottom: 0.75rem;
+  color: #111827;
+}
+
+.option-label:hover {
+  background-color: #ffffff;
+}
+
+.option-label span {
+  color: #111827;
 }
 
 .option-label.selected {
@@ -135,4 +195,42 @@
 }
 @media (min-width: 768px) {
   .mobile-toggle { display: none; }
+}
+
+/* Thin scrollbars for chat history containers */
+.chat-scroll-mini {
+  scrollbar-width: thin;
+  scrollbar-color: #a5b4fc transparent;
+}
+
+.chat-scroll-mini::-webkit-scrollbar {
+  width: 6px;
+}
+
+.chat-scroll-mini::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.chat-scroll-mini::-webkit-scrollbar-thumb {
+  background: #a5b4fc;
+  border-radius: 9999px;
+}
+
+.dark .chat-scroll-mini {
+  scrollbar-color: #6366f1 #1f2937;
+}
+
+.dark .chat-scroll-mini::-webkit-scrollbar-track {
+  background: #1f2937;
+}
+
+.dark .chat-scroll-mini::-webkit-scrollbar-thumb {
+  background: #6366f1;
+}
+
+.joined-groups-list {
+  max-height: 26rem;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 0.125rem;
 }

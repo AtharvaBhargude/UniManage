@@ -3,7 +3,7 @@ import {
   Menu, LogOut, Sun, Moon 
 } from 'lucide-react';
 
-export const Layout = ({ children, user, onLogout, title }) => {
+export const Layout = ({ children, user, onLogout, title, sidebarItems = [], activeSidebarItem, onSidebarItemClick }) => {
   const [isSidebarOpen, setSidebarOpen] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(false);
 
@@ -43,7 +43,18 @@ export const Layout = ({ children, user, onLogout, title }) => {
           </div>
 
           <div className="sidebar-nav">
-             {/* Navigation Items could go here */}
+             {sidebarItems.map(item => (
+               <button
+                 key={item.id}
+                 className={`sidebar-nav-item ${activeSidebarItem === item.id ? 'active' : ''}`}
+                 onClick={() => {
+                   onSidebarItemClick?.(item.id);
+                   setSidebarOpen(false);
+                 }}
+               >
+                 {item.label}
+               </button>
+             ))}
           </div>
 
           <div className="sidebar-footer">

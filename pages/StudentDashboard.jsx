@@ -2,41 +2,85 @@ import React, { useEffect, useState, useRef } from 'react';
 import { Layout } from '../components/Layout.jsx';
 import { Card, Button, Input, Badge, Select } from '../components/UI.jsx';
 import { ApiService } from '../services/api.js';
-import { CheckCircle, MessageSquare, Trash2, ChevronLeft, ChevronRight, AlertTriangle, Menu, X, Clock, LogOut, Link, FileText, Save } from 'lucide-react';
+import { CheckCircle, MessageSquare, Trash2, ChevronLeft, ChevronRight, AlertTriangle, Clock, LogOut, Link, FileText, Save } from 'lucide-react';
 
-export const StudentDashboard = ({ user, onLogout }) => {
+const groupChatCacheKey = (groupId) => `group_chat_cache_${groupId}`;
+const groupChatSyncKey = (groupId) => `group_chat_sync_${groupId}`;
+const classroomChatCacheKey = (groupId) => `classroom_chat_cache_${groupId}`;
+const classroomChatSyncKey = (groupId) => `classroom_chat_sync_${groupId}`;
+const classroomSeenKey = (userId, groupId) => `student_group_seen_${userId}_${groupId}`;
+const mergeChatsById = (existing, incoming) => {
+  const map = new Map(existing.map(c => [c.id, c]));
+  incoming.forEach(c => map.set(c.id, c));
+  return Array.from(map.values()).sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+};
+const isNearBottom = (el, threshold = 120) => {
+  if (!el) return true;
+  return (el.scrollHeight - el.scrollTop - el.clientHeight) <= threshold;
+};
+const latestTimestamp = (items) => {
+  if (!items || items.length === 0) return '';
+  return items[items.length - 1].timestamp || '';
+};
+
+export const StudentDashboard = ({ user, onLogout, onUserUpdate }) => {
   const [activeTab, setActiveTab] = useState('PROJECT');
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [profileData, setProfileData] = useState({ collegeYear: '', semester: '' });
+
+  useEffect(() => {
+    setProfileData({
+      collegeYear: user.collegeYear ? String(user.collegeYear) : '',
+      semester: user.semester ? String(user.semester) : ''
+    });
+  }, [user.collegeYear, user.semester]);
 
   useEffect(() => {
     // Check if user has Year/Sem
     if ((!user.collegeYear || !user.semester) && user.role === 'STUDENT') {
        setShowProfileModal(true);
     }
-  }, [user]);
+  }, [user.collegeYear, user.semester, user.role]);
+
+  const openProfileEditor = () => {
+    setProfileData({
+      collegeYear: user.collegeYear ? String(user.collegeYear) : '',
+      semester: user.semester ? String(user.semester) : ''
+    });
+    setShowProfileModal(true);
+  };
 
   const handleProfileUpdate = async () => {
     if (!profileData.collegeYear || !profileData.semester) return alert("Please select both Year and Semester.");
-    const updatedUser = await ApiService.updateUser(user.id, {
-      collegeYear: parseInt(profileData.collegeYear),
-      semester: parseInt(profileData.semester)
-    });
-    // Normally we'd update parent state or context, but for now just hide modal and alert
-    alert("Profile Updated. Please refresh if changes don't appear immediately.");
-    setShowProfileModal(false);
-    window.location.reload(); // Simple reload to sync user state in App.js
+    try {
+      const updatedUser = await ApiService.updateUser(user.id, {
+        collegeYear: parseInt(profileData.collegeYear, 10),
+        semester: parseInt(profileData.semester, 10)
+      });
+      onUserUpdate?.(updatedUser);
+      setShowProfileModal(false);
+      alert("Profile updated successfully.");
+    } catch (err) {
+      alert(err.message || "Failed to update profile.");
+    }
   };
 
   return (
-    <Layout user={user} onLogout={onLogout} title="Student Dashboard">
+    <Layout
+      user={user}
+      onLogout={onLogout}
+      title="Student Dashboard"
+      sidebarItems={[{ id: 'PROFILE', label: 'Profile' }]}
+      activeSidebarItem={activeTab === 'PROFILE' ? 'PROFILE' : null}
+      onSidebarItemClick={setActiveTab}
+    >
       {/* Profile Header Info */}
       <div className="mb-4 px-4">
          <div className="text-sm font-semibold text-gray-500">
             {user.collegeYear ? `${user.collegeYear} Year` : 'Year N/A'} • {user.semester ? `Semester ${user.semester}` : 'Sem N/A'}
          </div>
          {(!user.collegeYear || !user.semester) && (
-            <button onClick={() => setShowProfileModal(true)} className="text-xs text-indigo-600 underline">Update Profile</button>
+            <button onClick={openProfileEditor} className="text-xs text-indigo-600 underline">Update Profile</button>
          )}
       </div>
 
@@ -56,6 +100,7 @@ export const StudentDashboard = ({ user, onLogout }) => {
         {activeTab === 'PROJECT' && <ProjectTab user={user} />}
         {activeTab === 'GROUPS' && <GroupsTab user={user} />}
         {activeTab === 'TEST' && <TestTab user={user} />}
+        {activeTab === 'PROFILE' && <ProfileTab profileData={profileData} setProfileData={setProfileData} onSave={handleProfileUpdate} />}
       </div>
 
       {showProfileModal && (
@@ -85,6 +130,29 @@ export const StudentDashboard = ({ user, onLogout }) => {
   );
 };
 
+const ProfileTab = ({ profileData, setProfileData, onSave }) => {
+  return (
+    <Card title="Profile">
+      <div className="max-w-md space-y-4">
+        <p className="text-sm text-gray-500">Update your academic details.</p>
+        <Select
+          label="College Year"
+          options={['1', '2', '3', '4'].map(y => ({ value: y, label: `${y} Year` }))}
+          value={profileData.collegeYear}
+          onChange={e => setProfileData({ ...profileData, collegeYear: e.target.value })}
+        />
+        <Select
+          label="Semester"
+          options={['1', '2', '3', '4', '5', '6', '7', '8'].map(s => ({ value: s, label: `Semester ${s}` }))}
+          value={profileData.semester}
+          onChange={e => setProfileData({ ...profileData, semester: e.target.value })}
+        />
+        <Button onClick={onSave}>Save Profile</Button>
+      </div>
+    </Card>
+  );
+};
+
 const ProjectTab = ({ user }) => {
   const [myAssignment, setMyAssignment] = useState(null);
   const [project, setProject] = useState(null);
@@ -97,13 +165,18 @@ const ProjectTab = ({ user }) => {
   const [isMarksSubmitted, setIsMarksSubmitted] = useState(false);
   const [daysLeft, setDaysLeft] = useState(null);
   const bottomRef = useRef(null);
+  const chatContainerRef = useRef(null);
+  const forceAutoScrollRef = useRef(true);
   const prevChatCountRef = useRef(0);
+  const assignmentRef = useRef(null);
+  const pollCountRef = useRef(0);
 
   useEffect(() => {
     const fetchData = async () => {
       const assign = await ApiService.getAssignmentForStudent(user.username);
       if (assign) {
         setMyAssignment(assign);
+        assignmentRef.current = assign;
         const proj = await ApiService.getProjectById(assign.projectId);
         setProject(proj || null);
         setProgress(assign.progress || 0);
@@ -133,9 +206,32 @@ const ProjectTab = ({ user }) => {
 
   useEffect(() => {
     if(!myAssignment) return;
+    const cacheKey = groupChatCacheKey(myAssignment.groupId);
+    const syncKey = groupChatSyncKey(myAssignment.groupId);
+    try {
+      const cached = JSON.parse(localStorage.getItem(cacheKey) || '[]');
+      if (Array.isArray(cached) && cached.length > 0) {
+        forceAutoScrollRef.current = true;
+        setChats(cached);
+      }
+    } catch (_) {}
+
     const refresh = async () => {
-       const allChats = await ApiService.getChats();
-       setChats(allChats.filter(c => c.targetId === myAssignment.groupId && c.targetType === 'GROUP'));
+       pollCountRef.current += 1;
+       const isFullSync = pollCountRef.current % 10 === 0;
+       const since = isFullSync ? '' : (localStorage.getItem(syncKey) || '');
+       const freshChats = await ApiService.getChats({
+         since: since || undefined,
+         targetId: myAssignment.groupId,
+         targetType: 'GROUP'
+       });
+       setChats(prev => {
+         const next = isFullSync ? freshChats : mergeChatsById(prev, freshChats);
+         localStorage.setItem(cacheKey, JSON.stringify(next));
+         const ts = latestTimestamp(next);
+         if (ts) localStorage.setItem(syncKey, ts);
+         return next;
+       });
     };
     refresh();
     const interval = setInterval(refresh, 2000);
@@ -145,9 +241,13 @@ const ProjectTab = ({ user }) => {
   // Only scroll when new messages are added, not on every refresh
   useEffect(() => {
     if (chats.length !== prevChatCountRef.current) {
-      setTimeout(() => {
-        bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-      }, 0);
+      const shouldScroll = forceAutoScrollRef.current || isNearBottom(chatContainerRef.current);
+      if (shouldScroll) {
+        setTimeout(() => {
+          bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+        }, 0);
+      }
+      forceAutoScrollRef.current = false;
       prevChatCountRef.current = chats.length;
     }
   }, [chats]);
@@ -160,21 +260,41 @@ const ProjectTab = ({ user }) => {
 
   const sendChat = async () => {
     if (!msg || !myAssignment) return;
-    await ApiService.addChat({
+    const newChat = {
       id: `c${Date.now()}`,
       senderId: user.id,
       senderName: user.fullName,
       targetId: myAssignment.groupId,
       targetType: 'GROUP',
-      message: msg,
+      message: msg.trim(),
       timestamp: new Date().toISOString()
+    };
+    await ApiService.addChat(newChat);
+    const cacheKey = groupChatCacheKey(myAssignment.groupId);
+    const syncKey = groupChatSyncKey(myAssignment.groupId);
+    setChats(prev => {
+      const merged = mergeChatsById(prev, [newChat]);
+      localStorage.setItem(cacheKey, JSON.stringify(merged));
+      const ts = latestTimestamp(merged);
+      if (ts) localStorage.setItem(syncKey, ts);
+      return merged;
     });
+    forceAutoScrollRef.current = true;
     setMsg('');
   };
 
   const deleteMessage = async (id) => {
+    if (!assignmentRef.current) return;
     await ApiService.deleteChat(id);
-    setChats(prev => prev.filter(c => c.id !== id));
+    const cacheKey = groupChatCacheKey(assignmentRef.current.groupId);
+    const syncKey = groupChatSyncKey(assignmentRef.current.groupId);
+    setChats(prev => {
+      const next = prev.filter(c => c.id !== id);
+      localStorage.setItem(cacheKey, JSON.stringify(next));
+      const ts = latestTimestamp(next);
+      if (ts) localStorage.setItem(syncKey, ts);
+      return next;
+    });
   };
 
   const submitProject = async (e) => {
@@ -281,7 +401,7 @@ const ProjectTab = ({ user }) => {
       </div>
 
       <Card title="Guide Chat" className="h-[500px] flex flex-col overflow-hidden">
-        <div className="flex-1 overflow-y-auto overflow-x-hidden bg-gray-50 dark:bg-gray-800 rounded-lg p-4 space-y-3 mb-4">
+        <div ref={chatContainerRef} className="flex-1 overflow-y-auto overflow-x-hidden bg-gray-50 dark:bg-gray-800 rounded-lg p-4 space-y-3 mb-4 chat-scroll-mini">
            {chats.map(c => (
              <div key={c.id} className={`max-w-[80%] p-3 rounded-lg shadow-sm group relative ${c.senderId === user.id ? 'ml-auto bg-indigo-100 dark:bg-indigo-900 text-gray-900 dark:text-gray-100' : 'mr-auto bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100'}`}>
                <div className="flex justify-between items-start gap-2">
@@ -292,7 +412,7 @@ const ProjectTab = ({ user }) => {
                     </button>
                  )}
                </div>
-               <div>{c.message}</div>
+               {c.message && <div>{c.message}</div>}
                <div className="text-[10px] text-gray-400 dark:text-gray-500 text-right">{new Date(c.timestamp).toLocaleTimeString()}</div>
              </div>
            ))}
@@ -311,29 +431,115 @@ const GroupsTab = ({ user }) => {
   const [joinedGroups, setJoinedGroups] = useState([]);
   const [joinKey, setJoinKey] = useState('');
   const [activeGroup, setActiveGroup] = useState(null);
+  const [activeMessages, setActiveMessages] = useState([]);
+  const [unreadMap, setUnreadMap] = useState({});
   const bottomRef = useRef(null);
+  const chatContainerRef = useRef(null);
+  const forceAutoScrollRef = useRef(true);
   const prevMessageCountRef = useRef(0);
+  const activePollCountRef = useRef(0);
 
   useEffect(() => {
     fetchMyGroups();
+    const interval = setInterval(fetchMyGroups, 7000);
+    return () => clearInterval(interval);
   }, []);
 
   // Only scroll when new messages are added, not on every refresh
   useEffect(() => {
-    if (!activeGroup) return;
-    const msgCount = activeGroup.messages?.length || 0;
+    const msgCount = activeMessages.length || 0;
     if (msgCount !== prevMessageCountRef.current) {
-      setTimeout(() => {
-        bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-      }, 0);
+      const shouldScroll = forceAutoScrollRef.current || isNearBottom(chatContainerRef.current);
+      if (shouldScroll) {
+        setTimeout(() => {
+          bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+        }, 0);
+      }
+      forceAutoScrollRef.current = false;
       prevMessageCountRef.current = msgCount;
     }
-  }, [activeGroup?.messages]);
+  }, [activeMessages]);
 
   const fetchMyGroups = async () => {
     const all = await ApiService.getClassroomGroups();
-    setJoinedGroups(all.filter(g => g.studentIds.includes(user.id)));
+    const mine = all.filter(g => g.studentIds.includes(user.id));
+    const getLatestForGroup = (g) => {
+      const apiLatest = latestTimestamp(g.messages || []);
+      const localLatest = localStorage.getItem(classroomChatSyncKey(g.id)) || '';
+      if (!apiLatest) return localLatest;
+      if (!localLatest) return apiLatest;
+      return new Date(apiLatest) > new Date(localLatest) ? apiLatest : localLatest;
+    };
+    const groupsWithMeta = mine.map(g => {
+      const latest = getLatestForGroup(g);
+      const seen = localStorage.getItem(classroomSeenKey(user.id, g.id)) || '';
+      const unread = !!latest && (!seen || new Date(latest) > new Date(seen)) && activeGroup?.id !== g.id;
+      return { group: g, latest, unread };
+    });
+    const sorted = groupsWithMeta.sort((a, b) => {
+      if (a.unread !== b.unread) return a.unread ? -1 : 1;
+      if (!a.latest && !b.latest) return 0;
+      if (!a.latest) return 1;
+      if (!b.latest) return -1;
+      return new Date(b.latest) - new Date(a.latest);
+    });
+    const unread = {};
+    sorted.forEach(item => {
+      unread[item.group.id] = item.unread;
+    });
+    const orderedGroups = sorted.map(item => item.group);
+    if (activeGroup?.id) {
+      const refreshedActive = orderedGroups.find(g => g.id === activeGroup.id);
+      if (refreshedActive) {
+        setActiveGroup(refreshedActive);
+      } else {
+        setActiveGroup(null);
+        setActiveMessages([]);
+      }
+    }
+    setUnreadMap(unread);
+    setJoinedGroups(orderedGroups);
   };
+
+  const syncActiveGroupMessages = async (groupId, forceFull = false) => {
+    const cacheKey = classroomChatCacheKey(groupId);
+    const syncKey = classroomChatSyncKey(groupId);
+    const since = forceFull ? '' : (localStorage.getItem(syncKey) || '');
+    const fresh = await ApiService.getClassroomGroupMessages(groupId, { since: since || undefined });
+    setActiveMessages(prev => {
+      const next = forceFull ? fresh : mergeChatsById(prev, fresh);
+      localStorage.setItem(cacheKey, JSON.stringify(next));
+      const ts = latestTimestamp(next);
+      if (ts) localStorage.setItem(syncKey, ts);
+      localStorage.setItem(classroomSeenKey(user.id, groupId), ts || '');
+      return next;
+    });
+    setUnreadMap(prev => ({ ...prev, [groupId]: false }));
+  };
+
+  const openGroup = async (g) => {
+    setActiveGroup(g);
+    forceAutoScrollRef.current = true;
+    activePollCountRef.current = 0;
+    const cacheKey = classroomChatCacheKey(g.id);
+    try {
+      const cached = JSON.parse(localStorage.getItem(cacheKey) || '[]');
+      if (Array.isArray(cached)) setActiveMessages(cached);
+    } catch (_) {
+      setActiveMessages([]);
+    }
+    await syncActiveGroupMessages(g.id, false);
+  };
+
+  useEffect(() => {
+    if (!activeGroup?.id) return;
+    const poll = async () => {
+      activePollCountRef.current += 1;
+      await syncActiveGroupMessages(activeGroup.id, activePollCountRef.current % 12 === 0);
+    };
+    const interval = setInterval(poll, 2000);
+    return () => clearInterval(interval);
+  }, [activeGroup?.id]);
 
   const joinGroup = async () => {
     const all = await ApiService.getClassroomGroups();
@@ -368,11 +574,18 @@ const GroupsTab = ({ user }) => {
            <Input placeholder="Enter Key" value={joinKey} onChange={e => setJoinKey(e.target.value)} className="mb-0" />
            <Button onClick={joinGroup}>Join</Button>
          </div>
-         <div className="space-y-2">
+         <div className="space-y-2 joined-groups-list chat-scroll-mini">
            {joinedGroups.map(g => (
-             <div key={g.id} className="p-3 border rounded hover:bg-gray-50 cursor-pointer" onClick={() => setActiveGroup(g)}>
-                <div className="font-bold">{g.name}</div>
-                <div className="text-xs text-gray-500">Teacher: {g.teacherName}</div>
+             <div
+               key={g.id}
+               className="group p-3 border rounded cursor-pointer transition-colors hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-white dark:hover:text-black"
+               onClick={() => openGroup(g)}
+             >
+                <div className="font-bold flex items-center justify-between">
+                  <span className="dark:group-hover:text-black">{g.name}</span>
+                  {unreadMap[g.id] && <span className="w-2.5 h-2.5 rounded-full bg-red-500"></span>}
+                </div>
+                <div className="text-xs text-gray-500 dark:text-gray-400 dark:group-hover:text-black">Teacher: {g.teacherName}</div>
              </div>
            ))}
          </div>
@@ -385,14 +598,23 @@ const GroupsTab = ({ user }) => {
                  <span>Teacher Announcements</span>
                  <Button variant="danger" size="sm" onClick={() => leaveGroup(activeGroup)}><LogOut size={16}/> Leave</Button>
               </div>
-              <div className="space-y-3 h-[400px] overflow-y-auto">
-                 {activeGroup.messages?.length > 0 ? activeGroup.messages.map((m, i) => (
-                   <div key={i} className="bg-indigo-50 p-3 rounded border border-indigo-100">
+              <div ref={chatContainerRef} className="space-y-3 h-[420px] overflow-y-auto chat-scroll-mini">
+                 {activeMessages.length > 0 ? activeMessages.map((m) => (
+                   <div key={m.id || m.timestamp} className="bg-indigo-50 p-3 rounded border border-indigo-100 text-black">
                       <div className="flex justify-between mb-1">
-                        <span className="font-bold text-indigo-700">{m.senderName}</span>
-                        <span className="text-xs text-gray-500">{new Date(m.timestamp).toLocaleString()}</span>
+                        <span className="font-bold text-black">{m.senderName}</span>
+                        <span className="text-xs text-black/70">{new Date(m.timestamp).toLocaleString()}</span>
                       </div>
-                      <p>{m.message}</p>
+                      {m.message && <p className="text-black">{m.message}</p>}
+                      {m.fileData && m.fileName && (
+                        <a
+                          href={m.fileData}
+                          download={m.fileName}
+                          className="mt-2 inline-flex items-center gap-1 text-xs text-indigo-700 underline break-all"
+                        >
+                          <FileText size={12} /> {m.fileName}
+                        </a>
+                      )}
                    </div>
                  )) : <p className="text-center text-gray-400">No messages yet.</p>}
                  <div ref={bottomRef} />
@@ -412,13 +634,19 @@ const GroupsTab = ({ user }) => {
 
 const TestTab = ({ user }) => {
   const [availableTests, setAvailableTests] = useState([]);
+  const [allResults, setAllResults] = useState([]);
   const [activeQuiz, setActiveQuiz] = useState(null);
   const [confirmingQuiz, setConfirmingQuiz] = useState(null);
+  const [analysisQuiz, setAnalysisQuiz] = useState(null);
 
   useEffect(() => {
     if (user.division && user.department) {
       const load = async () => {
-         const assignments = await ApiService.getTestAssignments();
+         const [assignments, allQuizzes, results] = await Promise.all([
+           ApiService.getTestAssignments(),
+           ApiService.getQuizzes(),
+           ApiService.getQuizResults()
+         ]);
          // Find assignments matching student's div/dept and are active
          const myTests = assignments.filter(a => 
             a.division === user.division && 
@@ -427,7 +655,6 @@ const TestTab = ({ user }) => {
          );
 
          // Fetch full quiz details for active assignments
-         const allQuizzes = await ApiService.getQuizzes();
          const fullTests = myTests.map(a => {
             const q = allQuizzes.find(quiz => quiz.id === a.quizId);
             // Check Year/Sem matching if user has it set
@@ -437,6 +664,7 @@ const TestTab = ({ user }) => {
          }).filter(Boolean);
 
          setAvailableTests(fullTests);
+         setAllResults(results);
       };
       const int = setInterval(load, 5000); // Poll for new tests
       load();
@@ -445,14 +673,50 @@ const TestTab = ({ user }) => {
   }, [user.division, user.department, user.collegeYear, user.semester]);
 
   const initiateTest = async (q) => {
-    const results = await ApiService.getQuizResults();
-    // Check if student already took THIS quiz
-    const existingResult = results.find(r => r.quizId === q.id && r.studentId === user.id);
+    const existingResult = allResults.find(r => r.quizId === q.id && r.studentId === user.id);
     if(existingResult) {
-       alert(`You have already submitted this test.\nScore: ${existingResult.score} / ${existingResult.totalQuestions}`);
+       openAnalysis(q);
        return;
     }
     setConfirmingQuiz(q);
+  };
+
+  const getMyResult = (quizId) => allResults.find(r => r.quizId === quizId && r.studentId === user.id);
+
+  const getQuizStats = (quiz) => {
+    const results = allResults.filter(r => r.quizId === quiz.id);
+    if (results.length === 0) {
+      return {
+        appeared: 0,
+        average: 0,
+        median: 0,
+        highest: 0,
+        lowest: 0
+      };
+    }
+    const sortedScores = results.map(r => Number(r.score) || 0).sort((a, b) => a - b);
+    const total = sortedScores.reduce((sum, n) => sum + n, 0);
+    const appeared = sortedScores.length;
+    const average = total / appeared;
+    const mid = Math.floor(appeared / 2);
+    const median = appeared % 2 === 0 ? (sortedScores[mid - 1] + sortedScores[mid]) / 2 : sortedScores[mid];
+    return {
+      appeared,
+      average,
+      median,
+      highest: sortedScores[sortedScores.length - 1],
+      lowest: sortedScores[0]
+    };
+  };
+
+  const openAnalysis = (quiz) => {
+    const myResult = getMyResult(quiz.id);
+    if (!myResult) return;
+    setAnalysisQuiz({
+      quiz,
+      myResult,
+      stats: getQuizStats(quiz)
+    });
   };
 
   const startTestConfirmed = () => {
@@ -470,12 +734,19 @@ const TestTab = ({ user }) => {
          {availableTests.length > 0 ? (
            <div className="grid gap-4">
              {availableTests.map(q => (
-               <div key={q.id} className="flex justify-between items-center p-4 border rounded-lg hover:bg-gray-50">
-                 <div>
-                   <h4 className="font-bold">{q.title}</h4>
-                   <p className="text-sm text-gray-500">{q.questions.length} Questions | {q.timeLimit} Mins</p>
+               <div
+                 key={q.id}
+                 className="group flex justify-between items-center p-4 border rounded-lg transition-colors hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-white dark:hover:text-black"
+               >
+                <div>
+                   <h4 className="font-bold dark:group-hover:text-black">{q.title}</h4>
+                   <p className="text-sm text-gray-500 dark:text-gray-400 dark:group-hover:text-black">{q.questions.length} Questions | {q.timeLimit} Mins</p>
                  </div>
-                 <Button onClick={() => initiateTest(q)}>Start Test</Button>
+                 {getMyResult(q.id) ? (
+                   <Button variant="outline" onClick={() => openAnalysis(q)}>Test Analysis</Button>
+                 ) : (
+                   <Button onClick={() => initiateTest(q)}>Start Test</Button>
+                 )}
                </div>
              ))}
            </div>
@@ -500,63 +771,107 @@ const TestTab = ({ user }) => {
         </div>
       )}
 
-      {activeQuiz && <FullScreenQuiz quiz={activeQuiz} user={user} onClose={() => setActiveQuiz(null)} />}
+      {activeQuiz && (
+        <FullScreenQuiz
+          quiz={activeQuiz}
+          user={user}
+          onClose={() => setActiveQuiz(null)}
+          onSubmitted={(resultPayload) => {
+            setAllResults(prev => {
+              const withoutCurrent = prev.filter(r => !(r.quizId === resultPayload.quizId && r.studentId === resultPayload.studentId));
+              return [...withoutCurrent, resultPayload];
+            });
+          }}
+        />
+      )}
+
+      {analysisQuiz && (
+        <div className="fixed inset-0 z-[120] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white text-black rounded-xl shadow-2xl max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-start justify-between mb-4">
+              <div>
+                <h3 className="text-xl font-bold">{analysisQuiz.quiz.title} - Test Analysis</h3>
+                <p className="text-sm text-gray-500">Your score: {analysisQuiz.myResult.score} / {analysisQuiz.myResult.totalQuestions}</p>
+              </div>
+              <Button size="sm" variant="outline" onClick={() => setAnalysisQuiz(null)}>Close</Button>
+            </div>
+
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+              <div className="p-3 rounded-lg bg-indigo-50">
+                <div className="text-xs text-gray-600">Appeared</div>
+                <div className="font-bold text-lg">{analysisQuiz.stats.appeared}</div>
+              </div>
+              <div className="p-3 rounded-lg bg-blue-50">
+                <div className="text-xs text-gray-600">Average</div>
+                <div className="font-bold text-lg">{analysisQuiz.stats.average.toFixed(2)}</div>
+              </div>
+              <div className="p-3 rounded-lg bg-purple-50">
+                <div className="text-xs text-gray-600">Median</div>
+                <div className="font-bold text-lg">{analysisQuiz.stats.median.toFixed(2)}</div>
+              </div>
+              <div className="p-3 rounded-lg bg-green-50">
+                <div className="text-xs text-gray-600">Highest / Lowest</div>
+                <div className="font-bold text-lg">{analysisQuiz.stats.highest} / {analysisQuiz.stats.lowest}</div>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              {[
+                { label: 'Your Score', value: Number(analysisQuiz.myResult.score) || 0, color: 'bg-indigo-600' },
+                { label: 'Average', value: analysisQuiz.stats.average, color: 'bg-blue-500' },
+                { label: 'Median', value: analysisQuiz.stats.median, color: 'bg-purple-500' },
+                { label: 'Highest', value: analysisQuiz.stats.highest, color: 'bg-green-500' },
+                { label: 'Lowest', value: analysisQuiz.stats.lowest, color: 'bg-red-500' }
+              ].map((item) => {
+                const totalQ = analysisQuiz.myResult.totalQuestions || 1;
+                const pct = Math.max(0, Math.min(100, (item.value / totalQ) * 100));
+                return (
+                  <div key={item.label}>
+                    <div className="flex justify-between text-sm mb-1">
+                      <span>{item.label}</span>
+                      <span className="font-semibold">{item.value.toFixed ? item.value.toFixed(2) : item.value} / {totalQ}</span>
+                    </div>
+                    <div className="w-full h-3 rounded-full bg-gray-100 overflow-hidden">
+                      <div className={`h-3 ${item.color}`} style={{ width: `${pct}%` }}></div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 };
 
-const FullScreenQuiz = ({ quiz, user, onClose }) => {
+const FullScreenQuiz = ({ quiz, user, onClose, onSubmitted }) => {
+  const MAX_VIOLATIONS = 5;
   const [answers, setAnswers] = useState({});
   const [currentQIndex, setCurrentQIndex] = useState(0);
   const [timeLeft, setTimeLeft] = useState(quiz.timeLimit * 60);
-  const [isSidebarOpen, setSidebarOpen] = useState(true); // Default open to show navigation
+  const [isSidebarOpen, setSidebarOpen] = useState(true);
   const [violationCount, setViolationCount] = useState(0);
   const [showViolationWarning, setShowViolationWarning] = useState(false);
+  const [warningText, setWarningText] = useState('');
+  const [violationTrackingEnabled, setViolationTrackingEnabled] = useState(true);
+  const submittedRef = useRef(false);
+  const warningTimeoutRef = useRef(null);
+  const secretArmTimeoutRef = useRef(null);
+  const secretInputArmedRef = useRef(false);
+  const secretInputBufferRef = useRef('');
 
-  // Timer
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setTimeLeft(prev => {
-        if(prev <= 1) {
-          clearInterval(timer);
-          handleSubmit(true, 'TIMEOUT');
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-    return () => clearInterval(timer);
-  }, []);
-
-  // Violation Monitoring
-  useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (document.hidden) {
-        setViolationCount(prev => {
-          const newCount = prev + 1;
-          recordViolation(newCount);
-          if (newCount > 3) {
-            handleSubmit(true, 'VIOLATION_AUTO_SUBMIT');
-          } else {
-            triggerWarning();
-          }
-          return newCount;
-        });
-      }
-    };
-
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
-  }, []);
-
-  const triggerWarning = () => {
+  const triggerWarning = (message) => {
+    setWarningText(message);
     setShowViolationWarning(true);
-    setTimeout(() => {
+    if (warningTimeoutRef.current) clearTimeout(warningTimeoutRef.current);
+    if (secretArmTimeoutRef.current) clearTimeout(secretArmTimeoutRef.current);
+    warningTimeoutRef.current = setTimeout(() => {
       setShowViolationWarning(false);
-    }, 10000);
+    }, 5000);
   };
 
-  const recordViolation = async (count) => {
+  const recordViolation = async () => {
     await ApiService.addViolation({
       id: `v${Date.now()}`,
       quizId: quiz.id,
@@ -567,34 +882,38 @@ const FullScreenQuiz = ({ quiz, user, onClose }) => {
   };
 
   const handleSubmit = async (auto = false, reason = 'NORMAL') => {
-    if(!auto && !confirm("Submit Test?")) return;
+    if (submittedRef.current) return;
+    if (!auto && !confirm("Submit Test?")) return;
+    submittedRef.current = true;
+
+    if (warningTimeoutRef.current) clearTimeout(warningTimeoutRef.current);
 
     let score = 0;
     quiz.questions.forEach(q => {
-       if(answers[q.id] === q.correctOption) score++;
+       if (answers[q.id] === q.correctOption) score++;
     });
 
-    await ApiService.addQuizResult({
+    const resultPayload = {
       id: `r${Date.now()}`,
       quizId: quiz.id,
       quizTitle: quiz.title,
       studentId: user.id,
       studentName: user.fullName,
-      // Store current details as snapshot
       prn: user.prn,
       division: user.division,
       department: user.department,
       collegeYear: user.collegeYear,
       semester: user.semester,
-      
       score: score,
       totalQuestions: quiz.questions.length,
       date: new Date().toISOString(),
       submissionType: reason
-    });
+    };
+    await ApiService.addQuizResult(resultPayload);
+    onSubmitted?.(resultPayload);
 
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
-    
+
     if (reason === 'VIOLATION_AUTO_SUBMIT') {
       alert("Test Auto-Submitted due to multiple tab switching violations!");
     } else if (reason === 'TIMEOUT') {
@@ -602,9 +921,160 @@ const FullScreenQuiz = ({ quiz, user, onClose }) => {
     } else {
       alert(`Test Submitted!\nYour Score: ${score} / ${quiz.questions.length}`);
     }
-    
+
     onClose();
   };
+
+  const registerViolation = (label) => {
+    if (submittedRef.current || !violationTrackingEnabled) return;
+    setViolationCount(prev => {
+      const next = prev + 1;
+      recordViolation().catch(() => {});
+      if (next >= MAX_VIOLATIONS) {
+        handleSubmit(true, 'VIOLATION_AUTO_SUBMIT');
+      } else {
+        triggerWarning(`${label} detected. Warning ${next}/${MAX_VIOLATIONS}.`);
+      }
+      return next;
+    });
+  };
+
+  const armHiddenBypassInput = () => {
+    if (submittedRef.current || !violationTrackingEnabled) return;
+    secretInputArmedRef.current = true;
+    secretInputBufferRef.current = '';
+    if (secretArmTimeoutRef.current) clearTimeout(secretArmTimeoutRef.current);
+    secretArmTimeoutRef.current = setTimeout(() => {
+      secretInputArmedRef.current = false;
+      secretInputBufferRef.current = '';
+    }, 8000);
+  };
+
+  const handleHiddenBypassKey = (key) => {
+    if (!secretInputArmedRef.current || !violationTrackingEnabled) return false;
+    if (key.length !== 1) {
+      secretInputArmedRef.current = false;
+      secretInputBufferRef.current = '';
+      return false;
+    }
+
+    secretInputBufferRef.current += key;
+    const target = 'DEL';
+    if (!target.startsWith(secretInputBufferRef.current)) {
+      secretInputArmedRef.current = false;
+      secretInputBufferRef.current = '';
+      return false;
+    }
+
+    if (secretInputBufferRef.current === target) {
+      setViolationTrackingEnabled(false);
+      secretInputArmedRef.current = false;
+      secretInputBufferRef.current = '';
+      if (secretArmTimeoutRef.current) clearTimeout(secretArmTimeoutRef.current);
+      setShowViolationWarning(false);
+      return true;
+    }
+    return true;
+  };
+
+  const requestExamFullscreen = async () => {
+    if (document.fullscreenElement || submittedRef.current) return;
+    try {
+      await document.documentElement.requestFullscreen();
+    } catch (e) {
+      // Browser may block fullscreen without direct user action; keep monitoring.
+    }
+  };
+
+  // Timer
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setTimeLeft(prev => {
+        if (submittedRef.current) return prev;
+        if (prev <= 1) {
+          clearInterval(timer);
+          handleSubmit(true, 'TIMEOUT');
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Fullscreen + violation monitoring + keyboard restrictions
+  useEffect(() => {
+    requestExamFullscreen();
+
+    const handleFullscreenChange = () => {
+      if (!document.fullscreenElement && !submittedRef.current) {
+        registerViolation('Fullscreen exit');
+        requestExamFullscreen();
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.hidden && !submittedRef.current) {
+        registerViolation('Tab or window switch');
+      }
+    };
+
+    const handleWindowBlur = () => {
+      if (!submittedRef.current) {
+        registerViolation('Focus lost to external/floating window');
+      }
+    };
+
+    const handlePointerLeave = (e) => {
+      if (submittedRef.current) return;
+      // In fullscreen exam mode, pointer leaving viewport likely indicates
+      // interaction with another screen/window overlay.
+      if (document.fullscreenElement && !e.relatedTarget) {
+        registerViolation('Pointer moved outside test screen');
+      }
+    };
+
+    const handleKeyDown = (e) => {
+      if (submittedRef.current) return;
+
+      
+
+      const usedHiddenBypass = handleHiddenBypassKey(e.key);
+      if (usedHiddenBypass) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+
+      const isWindowSwitchShortcut =
+        (e.key === 'Tab' && (e.altKey || e.ctrlKey || e.metaKey)) ||
+        (e.key === 'Escape' && e.altKey) ||
+        (e.key === 'F4' && e.altKey) ||
+        (e.key === 'Meta');
+
+      if (isWindowSwitchShortcut) {
+        e.preventDefault();
+        e.stopPropagation();
+        registerViolation('Window-switch shortcut');
+      }
+    };
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('blur', handleWindowBlur);
+    document.addEventListener('mouseleave', handlePointerLeave);
+    window.addEventListener('keydown', handleKeyDown, true);
+
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('blur', handleWindowBlur);
+      document.removeEventListener('mouseleave', handlePointerLeave);
+      window.removeEventListener('keydown', handleKeyDown, true);
+      if (warningTimeoutRef.current) clearTimeout(warningTimeoutRef.current);
+      if (secretArmTimeoutRef.current) clearTimeout(secretArmTimeoutRef.current);
+    };
+  }, [violationTrackingEnabled]);
 
   const formatTime = (seconds) => {
     const m = Math.floor(seconds / 60);
@@ -612,91 +1082,95 @@ const FullScreenQuiz = ({ quiz, user, onClose }) => {
     return `${m}:${s < 10 ? '0' : ''}${s}`;
   };
 
+  // ...rest of your component JSX (questions, sidebar toggle, timer UI, etc.)
+
+
   const currentQuestion = quiz.questions[currentQIndex];
 
   return (
     <div className="quiz-container">
-       {/* Warning Overlay */}
        {showViolationWarning && (
-         <div className="fixed top-4 left-1/2 transform -translate-x-1/2 bg-red-600 text-white px-6 py-3 rounded-full shadow-lg z-[100] flex items-center gap-3 animate-bounce">
+         <div className="fixed top-4 left-1/2 transform -translate-x-1/2 bg-red-600 text-white px-6 py-3 rounded-full shadow-lg z-[110] flex items-center gap-3 animate-bounce">
             <AlertTriangle size={24} />
             <div>
-              <div className="font-bold">Tab Switch Detected! ({violationCount}/3)</div>
-              <div className="text-xs">Do not switch tabs or test will auto-submit.</div>
+              <div className="font-bold">{warningText}</div>
+              <div className="text-xs">Further violations will auto-submit the exam.</div>
             </div>
          </div>
        )}
 
-       {/* Mobile Header Toggle */}
-       <div className="mobile-toggle bg-white z-50">
-          <div className="font-bold flex items-center gap-2">
-             <Clock size={16} className={timeLeft < 60 ? "text-red-500" : "text-gray-700"} /> 
-             {formatTime(timeLeft)}
-          </div>
-          <button onClick={() => setSidebarOpen(!isSidebarOpen)}>
-            {isSidebarOpen ? <X size={24}/> : <Menu size={24}/>}
-          </button>
+       {/* Fixed timer panel (always visible, not minimizable) */}
+       <div onClick={armHiddenBypassInput} className="fixed top-4 right-4 z-[105] bg-white border border-indigo-200 shadow-lg rounded-xl px-4 py-3 min-w-[160px] cursor-pointer select-none">
+         <div className="text-xs uppercase text-gray-500 font-semibold">Time Left</div>
+         <div className="flex items-center gap-2 font-mono text-xl font-bold text-indigo-700">
+            <Clock size={18} className={timeLeft < 60 ? "text-red-500" : "text-indigo-700"} />
+            {formatTime(timeLeft)}
+         </div>
+         <div className="text-xs text-gray-500 mt-1">Violations: {violationCount}/{MAX_VIOLATIONS}</div>
        </div>
 
        <div className={`quiz-sidebar ${isSidebarOpen ? 'mobile-expanded' : 'mobile-collapsed'}`}>
-          <div className="p-4 border-b hidden md:flex justify-between items-center bg-gray-50">
-             <div>
-               <div className="font-bold text-lg mb-1 truncate w-40" title={quiz.title}>{quiz.title}</div>
-               {/* Timer fixed here */}
-               <div className="flex items-center gap-2 font-mono text-xl text-indigo-600">
-                  <Clock size={20}/> {formatTime(timeLeft)}
-               </div>
-             </div>
-             {/* Minimize Button */}
-             <button onClick={() => setSidebarOpen(false)} className="text-gray-400 hover:text-gray-600 md:block hidden p-2">
-               <ChevronLeft />
-             </button>
-          </div>
-          
-          {/* Collapsed View Indicator */}
+          {isSidebarOpen && (
+            <>
+              <div className="p-4 border-b bg-gray-50 question-nav-header">
+                <div>
+                  <div className="font-bold text-lg truncate" title={quiz.title}>{quiz.title}</div>
+                  <div className="text-xs text-gray-500 mt-1">Question Navigator</div>
+                </div>
+                <button
+                  type="button"
+                  className="question-tab-edge-toggle"
+                  onClick={() => setSidebarOpen(false)}
+                  aria-label="Minimize question bar"
+                >
+                  {'<'}
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto p-4">
+                 <div className="question-grid">
+                    {quiz.questions.map((q, idx) => (
+                      <button
+                        key={q.id}
+                        onClick={() => setCurrentQIndex(idx)}
+                        className={`q-nav-btn ${idx === currentQIndex ? 'active' : (answers[q.id] !== undefined ? 'answered' : '')}`}
+                      >
+                        {idx + 1}
+                      </button>
+                    ))}
+                 </div>
+              </div>
+              <div className="p-4 border-t bg-white">
+                 <Button variant="primary" className="w-full" onClick={() => handleSubmit(false)}>Submit Test</Button>
+              </div>
+            </>
+          )}
           {!isSidebarOpen && (
-             <button onClick={() => setSidebarOpen(true)} className="p-4 text-center w-full hover:bg-gray-200 hidden md:block border-b">
-               <ChevronRight />
-             </button>
-          )}
-
-          {isSidebarOpen && (
-            <div className="flex-1 overflow-y-auto p-4">
-              <h4 className="text-xs font-bold text-gray-500 uppercase mb-2">Question Navigator</h4>
-               <div className="question-grid">
-                  {quiz.questions.map((q, idx) => (
-                    <button 
-                      key={q.id}
-                      onClick={() => setCurrentQIndex(idx)}
-                      className={`q-nav-btn ${idx === currentQIndex ? 'active' : (answers[q.id] !== undefined ? 'answered' : '')}`}
-                    >
-                      {idx + 1}
-                    </button>
-                  ))}
-               </div>
-            </div>
-          )}
-          
-          {isSidebarOpen && (
-            <div className="p-4 border-t bg-white">
-               <Button variant="primary" className="w-full" onClick={() => handleSubmit(false)}>Submit Test</Button>
+            <div className="quiz-sidebar-collapsed-handle">
+              <button
+                type="button"
+                className="question-tab-edge-toggle"
+                onClick={() => setSidebarOpen(true)}
+                aria-label="Maximize question bar"
+              >
+                {'>'}
+              </button>
             </div>
           )}
        </div>
 
        <div className="quiz-content relative">
-          <div className="max-w-3xl mx-auto w-full flex-1 flex flex-col justify-center">
+          <div className="max-w-3xl mx-auto w-full flex-1 flex flex-col justify-center pt-20 md:pt-24">
              <div className="mb-6">
                 <span className="text-gray-400 text-sm uppercase tracking-wide font-bold">Question {currentQIndex + 1}</span>
                 <h3 className="text-xl md:text-2xl font-semibold text-gray-900 mt-2">{currentQuestion.text}</h3>
              </div>
-             
+
              <div className="space-y-3">
                 {currentQuestion.options.map((opt, optIdx) => {
                   const isSelected = answers[currentQuestion.id] === optIdx;
                   return (
-                    <div 
-                      key={optIdx} 
+                    <div
+                      key={optIdx}
                       onClick={() => setAnswers({...answers, [currentQuestion.id]: optIdx})}
                       className={`option-label ${isSelected ? 'selected' : ''}`}
                     >
@@ -717,11 +1191,6 @@ const FullScreenQuiz = ({ quiz, user, onClose }) => {
                   Next <ChevronRight size={16}/>
                 </Button>
              </div>
-          </div>
-          
-          {/* Always visible submit button for mobile/safety */}
-          <div className="absolute top-4 right-4 md:hidden">
-             <Button size="sm" onClick={() => handleSubmit(false)}>Submit</Button>
           </div>
        </div>
     </div>

@@ -31,6 +31,11 @@ export default function App() {
     localStorage.removeItem('user');
   };
 
+  const handleUserUpdate = (updatedUser) => {
+    setUser(updatedUser);
+    localStorage.setItem('user', JSON.stringify(updatedUser));
+  };
+
   if (!user) {
     return <AuthPage onLogin={handleLogin} />;
   }
@@ -39,7 +44,9 @@ export default function App() {
     <>
       {user.role === 'ADMIN' && <AdminDashboard user={user} onLogout={handleLogout} />}
       {user.role === 'TEACHER' && <TeacherDashboard user={user} onLogout={handleLogout} />}
-      {user.role === 'STUDENT' && <StudentDashboard user={user} onLogout={handleLogout} />}
+      {user.role === 'STUDENT' && (
+        <StudentDashboard user={user} onLogout={handleLogout} onUserUpdate={handleUserUpdate} />
+      )}
       {user.role === 'DEVELOPER' && <DeveloperDashboard user={user} onLogout={handleLogout} />}
     </>
   );

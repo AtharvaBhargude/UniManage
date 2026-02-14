@@ -5,8 +5,21 @@ import { ApiService } from '../services/api.js';
 import { DEPARTMENTS, DIVISIONS } from '../constants.js';
 import { 
   PlusCircle, Users, BookOpen, ClipboardList, 
-  CheckCircle, FileText, UserCheck, MessageSquare, Award, Trash2, Download, Link, Send
+  CheckCircle, FileText, UserCheck, Award, Trash2, Download, Link, Send, MessageCircle, Paperclip
 } from 'lucide-react';
+
+const classroomChatCacheKey = (groupId) => `classroom_chat_cache_${groupId}`;
+const classroomChatSyncKey = (groupId) => `classroom_chat_sync_${groupId}`;
+const classroomSeenKey = (userId, groupId) => `admin_classroom_seen_${userId}_${groupId}`;
+const mergeChatsById = (existing, incoming) => {
+  const map = new Map(existing.map(c => [c.id, c]));
+  incoming.forEach(c => map.set(c.id, c));
+  return Array.from(map.values()).sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+};
+const latestTimestamp = (items) => {
+  if (!items || items.length === 0) return '';
+  return items[items.length - 1].timestamp || '';
+};
 
 export const AdminDashboard = ({ user, onLogout }) => {
   const [activeTab, setActiveTab] = useState('ADD_PROJECT');
@@ -53,7 +66,6 @@ export const AdminDashboard = ({ user, onLogout }) => {
     { id: 'SUBMITTED_PROJECTS', label: 'Subs', icon: CheckCircle },
     { id: 'CLASSROOM', label: 'Classroom', icon: Users },
     { id: 'USERS', label: 'Users', icon: Users },
-    { id: 'CHATS', label: 'Chats', icon: MessageSquare },
     { id: 'MARKS', label: 'Marks', icon: Award }
   ];
 
@@ -80,15 +92,14 @@ export const AdminDashboard = ({ user, onLogout }) => {
       )}
 
       <div className="animate-fadeIn">
-        {activeTab === 'ADD_PROJECT' && <AddProjectForm teachers={teachers} onSuccess={showSuccess} adminId={user.id} />}
-        {activeTab === 'ASSIGN_PROJECT' && <AssignProjectForm projects={projects} groups={groups} adminId={user.id} onSuccess={showSuccess} />}
+        {activeTab === 'ADD_PROJECT' && <AddProjectForm onSuccess={showSuccess} adminId={user.id} />}
+        {activeTab === 'ASSIGN_PROJECT' && <AssignProjectForm projects={projects} groups={groups} teachers={teachers} adminId={user.id} onSuccess={showSuccess} />}
         {activeTab === 'CREATE_GROUP' && <CreateGroupForm onSuccess={showSuccess} />}
         {activeTab === 'VIEW_GUIDE' && <ViewGuidesTable assignments={assignments} groups={groups} projects={projects} teachers={teachers} />}
-        {activeTab === 'VIEW_ASSIGNMENTS' && <ViewAssignmentsList assignments={assignments} groups={groups} projects={projects} />}
+        {activeTab === 'VIEW_ASSIGNMENTS' && <ViewAssignmentsList assignments={assignments} groups={groups} projects={projects} onSuccess={showSuccess} />}
         {activeTab === 'SUBMITTED_PROJECTS' && <SubmittedProjectsList assignments={assignments} groups={groups} projects={projects} />}
         {activeTab === 'CLASSROOM' && <AdminClassroomManager user={user} />}
         {activeTab === 'USERS' && <UsersManagement onSuccess={showSuccess} />}
-        {activeTab === 'CHATS' && <ChatMonitor teachers={teachers} adminUser={user} />}
         {activeTab === 'MARKS' && <MarksManager onSuccess={showSuccess} />}
       </div>
     </Layout>
@@ -96,32 +107,77 @@ export const AdminDashboard = ({ user, onLogout }) => {
 };
 
 const AdminClassroomManager = ({ user }) => {
-  // Logic virtually identical to Teacher's Classroom manager, but Admin sees ALL groups
   const [groups, setGroups] = useState([]);
+  const [mode, setMode] = useState('GROUPS');
+  const [newGroupName, setNewGroupName] = useState('');
+  const [joinKey, setJoinKey] = useState('');
   const [selectedGroup, setSelectedGroup] = useState(null);
   const [message, setMessage] = useState('');
+  const [pendingFile, setPendingFile] = useState(null);
+  const [activeMessages, setActiveMessages] = useState([]);
+  const [unreadMap, setUnreadMap] = useState({});
+  const pollRef = useRef(0);
   const bottomRef = useRef(null);
-  const prevMessageCountRef = useRef(0);
+  const forceAutoScrollRef = useRef(false);
 
   useEffect(() => {
     fetchGroups();
-  }, []);
+    const interval = setInterval(fetchGroups, 7000);
+    return () => clearInterval(interval);
+  }, [selectedGroup?.id]);
 
-  // Only scroll when new messages are added, not on every refresh
   useEffect(() => {
-    if (!selectedGroup) return;
-    const msgCount = selectedGroup.messages?.length || 0;
-    if (msgCount !== prevMessageCountRef.current) {
-      setTimeout(() => {
-        bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-      }, 0);
-      prevMessageCountRef.current = msgCount;
+    if (!activeMessages.length) return;
+    if (forceAutoScrollRef.current) {
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+      forceAutoScrollRef.current = false;
     }
-  }, [selectedGroup?.messages]);
+  }, [activeMessages]);
 
   const fetchGroups = async () => {
     const all = await ApiService.getClassroomGroups();
-    setGroups(all); // Admin sees all
+    const mine = all.filter(g => g.teacherId === user.id || g.studentIds.includes(user.id));
+    const getLatestForGroup = (g) => {
+      const apiLatest = latestTimestamp(g.messages || []);
+      const localLatest = localStorage.getItem(classroomChatSyncKey(g.id)) || '';
+      if (!apiLatest) return localLatest;
+      if (!localLatest) return apiLatest;
+      return new Date(apiLatest) > new Date(localLatest) ? apiLatest : localLatest;
+    };
+    const sorted = [...mine].sort((a, b) => {
+      const aTs = getLatestForGroup(a);
+      const bTs = getLatestForGroup(b);
+      if (!aTs && !bTs) return 0;
+      if (!aTs) return 1;
+      if (!bTs) return -1;
+      return new Date(bTs) - new Date(aTs);
+    });
+    const unread = {};
+    sorted.forEach(g => {
+      const latest = getLatestForGroup(g);
+      const seen = localStorage.getItem(classroomSeenKey(user.id, g.id)) || '';
+      unread[g.id] = !!latest && (!seen || new Date(latest) > new Date(seen)) && selectedGroup?.id !== g.id;
+    });
+    setUnreadMap(unread);
+    setGroups(sorted);
+  };
+
+  const createGroup = async () => {
+    if (!newGroupName.trim()) return;
+    const key = Math.random().toString(36).substring(2, 8).toUpperCase();
+    await ApiService.addClassroomGroup({
+      id: `cg${Date.now()}`,
+      name: newGroupName.trim(),
+      joinKey: key,
+      teacherId: user.id,
+      teacherName: user.fullName,
+      studentIds: [],
+      messages: []
+    });
+    setNewGroupName('');
+    fetchGroups();
+    alert(`Group Created! Key: ${key}`);
+    setMode('KEYS');
   };
 
   const deleteGroup = async (g) => {
@@ -129,70 +185,246 @@ const AdminClassroomManager = ({ user }) => {
     await ApiService.deleteClassroomGroup(g.id);
     fetchGroups();
     setSelectedGroup(null);
+    setMode('GROUPS');
   };
 
+  const joinGroup = async () => {
+    const all = await ApiService.getClassroomGroups();
+    const group = all.find(g => g.joinKey === joinKey.toUpperCase());
+    if (!group) return alert("Invalid Key");
+    if (group.teacherId === user.id) return alert("You created this group.");
+    if (group.studentIds.includes(user.id)) return alert("Already joined.");
+    await ApiService.updateClassroomGroup(group.id, {
+      ...group,
+      studentIds: [...group.studentIds, user.id]
+    });
+    alert("Joined Group!");
+    setJoinKey('');
+    fetchGroups();
+    setMode('GROUPS');
+  };
+
+  const syncMessages = async (groupId, forceFull = false) => {
+    const cacheKey = classroomChatCacheKey(groupId);
+    const syncKey = classroomChatSyncKey(groupId);
+    const since = forceFull ? '' : (localStorage.getItem(syncKey) || '');
+    const fresh = await ApiService.getClassroomGroupMessages(groupId, { since: since || undefined });
+    setActiveMessages(prev => {
+      const next = forceFull ? fresh : mergeChatsById(prev, fresh);
+      localStorage.setItem(cacheKey, JSON.stringify(next));
+      const ts = latestTimestamp(next);
+      if (ts) localStorage.setItem(syncKey, ts);
+      localStorage.setItem(classroomSeenKey(user.id, groupId), ts || '');
+      return next;
+    });
+    setUnreadMap(prev => ({ ...prev, [groupId]: false }));
+  };
+
+  const openChat = async (group) => {
+    setSelectedGroup(group);
+    setMode('CHAT');
+    forceAutoScrollRef.current = true;
+    pollRef.current = 0;
+    const cacheKey = classroomChatCacheKey(group.id);
+    try {
+      const cached = JSON.parse(localStorage.getItem(cacheKey) || '[]');
+      setActiveMessages(Array.isArray(cached) ? cached : []);
+    } catch (_) {
+      setActiveMessages([]);
+    }
+    await syncMessages(group.id, false);
+  };
+
+  useEffect(() => {
+    if (mode !== 'CHAT' || !selectedGroup?.id) return;
+    const interval = setInterval(async () => {
+      pollRef.current += 1;
+      await syncMessages(selectedGroup.id, pollRef.current % 12 === 0);
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [mode, selectedGroup?.id]);
+
   const sendMessage = async () => {
-    if(!message || !selectedGroup) return;
+    if ((!message.trim() && !pendingFile) || !selectedGroup) return;
     const msgData = {
+      id: `cm${Date.now()}`,
       senderId: user.id,
-      senderName: user.fullName + ' (Admin)',
+      senderName: user.fullName,
       role: 'ADMIN',
-      message: message,
+      message: message.trim(),
+      fileName: pendingFile?.fileName || '',
+      fileType: pendingFile?.fileType || '',
+      fileData: pendingFile?.fileData || '',
       timestamp: new Date().toISOString()
     };
-    const updated = {
-      ...selectedGroup,
-      messages: [...(selectedGroup.messages || []), msgData]
-    };
-    await ApiService.updateClassroomGroup(selectedGroup.id, updated);
-    setSelectedGroup(updated);
+    await ApiService.addClassroomGroupMessage(selectedGroup.id, msgData);
+    const cacheKey = classroomChatCacheKey(selectedGroup.id);
+    const syncKey = classroomChatSyncKey(selectedGroup.id);
+    setActiveMessages(prev => {
+      const next = mergeChatsById(prev, [msgData]);
+      localStorage.setItem(cacheKey, JSON.stringify(next));
+      const ts = latestTimestamp(next);
+      if (ts) localStorage.setItem(syncKey, ts);
+      localStorage.setItem(classroomSeenKey(user.id, selectedGroup.id), ts || '');
+      return next;
+    });
     setMessage('');
+    setPendingFile(null);
+    forceAutoScrollRef.current = true;
+    fetchGroups();
+  };
+
+  const deleteMessage = async (messageId) => {
+    if (!selectedGroup?.id) return;
+    await ApiService.deleteClassroomGroupMessage(selectedGroup.id, messageId, user.id);
+    const cacheKey = classroomChatCacheKey(selectedGroup.id);
+    const syncKey = classroomChatSyncKey(selectedGroup.id);
+    setActiveMessages(prev => {
+      const next = prev.filter(m => m.id !== messageId);
+      localStorage.setItem(cacheKey, JSON.stringify(next));
+      const ts = latestTimestamp(next);
+      if (ts) localStorage.setItem(syncKey, ts);
+      return next;
+    });
+    fetchGroups();
+  };
+
+  const handleAttachment = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!/\.(ppt|pptx|doc|docx|xls|xlsx)$/i.test(file.name)) {
+      alert('Only PPT, Word, and Excel files are allowed.');
+      e.target.value = '';
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      setPendingFile({
+        fileName: file.name,
+        fileType: file.type || 'application/octet-stream',
+        fileData: reader.result
+      });
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
   };
 
   return (
-    <Card title="All Classroom Groups">
-       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 h-[500px]">
-         <div className="overflow-y-auto space-y-2 border-r pr-2">
+    <Card title="Classroom Groups">
+       <div className="flex gap-2 mb-4 overflow-x-auto pb-2">
+          <Button variant={mode === 'GROUPS' ? 'primary' : 'outline'} size="sm" onClick={() => setMode('GROUPS')}>My Groups</Button>
+          <Button variant={mode === 'CREATE' ? 'primary' : 'outline'} size="sm" onClick={() => setMode('CREATE')}>Create</Button>
+          <Button variant={mode === 'KEYS' ? 'primary' : 'outline'} size="sm" onClick={() => setMode('KEYS')}>Group Keys</Button>
+          <Button variant={mode === 'JOIN' ? 'primary' : 'outline'} size="sm" onClick={() => setMode('JOIN')}>Join Group</Button>
+       </div>
+
+       {mode === 'GROUPS' && (
+         <div className="grid gap-3">
             {groups.map(g => (
-              <div key={g.id} className="p-3 border rounded bg-white hover:bg-gray-50 cursor-pointer" onClick={() => setSelectedGroup(g)}>
-                 <div className="flex justify-between items-start">
-                    <div>
-                       <div className="font-bold">{g.name}</div>
-                       <div className="text-xs text-gray-500">Teacher: {g.teacherName}</div>
+              <div key={g.id} className="p-3 border rounded bg-white hover:shadow-md cursor-pointer flex justify-between items-center" onClick={() => openChat(g)}>
+                 <div>
+                    <div className="font-bold flex items-center gap-2">
+                      <span className="text-black">{g.name}</span>
+                      {unreadMap[g.id] && <span className="w-2.5 h-2.5 rounded-full bg-red-500"></span>}
                     </div>
-                    <button onClick={(e) => { e.stopPropagation(); deleteGroup(g); }} className="text-red-500 p-1"><Trash2 size={16}/></button>
+                    <div className="text-xs text-gray-500">{g.teacherId === user.id ? 'Created by Me' : `Teacher: ${g.teacherName}`}</div>
+                 </div>
+                 <div className="flex items-center gap-2">
+                   {g.teacherId === user.id && (
+                     <button onClick={(e) => { e.stopPropagation(); deleteGroup(g); }} className="text-red-500 hover:bg-red-50 p-1 rounded"><Trash2 size={16}/></button>
+                   )}
+                   <MessageCircle size={20} className="text-indigo-600"/>
                  </div>
               </div>
             ))}
-            {groups.length === 0 && <p className="text-gray-400 text-center py-4">No groups.</p>}
+            {groups.length === 0 && <p className="text-gray-400 text-center py-4">No groups yet.</p>}
          </div>
+       )}
 
-         <div className="col-span-2 flex flex-col h-full">
-            {selectedGroup ? (
-              <>
-                <div className="border-b pb-2 mb-2 font-bold">{selectedGroup.name} - Chat</div>
-                <div className="flex-1 overflow-y-auto bg-gray-50 p-4 rounded mb-4 space-y-3">
-                    {selectedGroup.messages?.map((m, i) => (
-                       <div key={i} className={`p-2 rounded max-w-[80%] ${m.senderId === user.id ? 'ml-auto bg-indigo-100' : 'bg-white border'}`}>
-                          <div className="flex justify-between items-baseline gap-2">
-                             <span className="font-bold text-xs text-indigo-700">{m.senderName}</span>
-                             <span className="text-[10px] text-gray-400">{new Date(m.timestamp).toLocaleTimeString()}</span>
-                          </div>
-                          <p className="text-sm">{m.message}</p>
-                       </div>
-                    ))}
-                    <div ref={bottomRef} />
-                </div>
-                <div className="flex gap-2">
-                    <Input placeholder="Message..." value={message} onChange={e => setMessage(e.target.value)} className="mb-0 flex-1" />
-                    <Button onClick={sendMessage}><Send size={18}/></Button>
-                </div>
-              </>
-            ) : (
-              <div className="flex items-center justify-center h-full text-gray-400">Select a group</div>
-            )}
+       {mode === 'CREATE' && (
+         <div className="max-w-sm mx-auto py-4 space-y-3">
+            <Input label="Group Name" value={newGroupName} onChange={e => setNewGroupName(e.target.value)} />
+            <Button onClick={createGroup} className="w-full">Generate Key & Create</Button>
          </div>
-       </div>
+       )}
+
+       {mode === 'KEYS' && (
+         <div className="space-y-2">
+            {groups.filter(g => g.teacherId === user.id).map(g => (
+               <div key={g.id} className="p-3 bg-indigo-50 border border-indigo-100 rounded flex justify-between">
+                  <span className="font-semibold text-black">{g.name}</span>
+                  <span className="font-mono bg-white px-2 rounded border text-black">{g.joinKey}</span>
+               </div>
+            ))}
+            {groups.filter(g => g.teacherId === user.id).length === 0 && <p className="text-center text-gray-400">You haven't created any groups.</p>}
+         </div>
+       )}
+
+       {mode === 'JOIN' && (
+         <div className="max-w-sm mx-auto py-4 space-y-3">
+            <Input label="Enter Group Key" value={joinKey} onChange={e => setJoinKey(e.target.value)} />
+            <Button onClick={joinGroup} className="w-full">Join Group</Button>
+         </div>
+       )}
+
+       {mode === 'CHAT' && selectedGroup && (
+          <div className="h-[500px] flex flex-col">
+             <div className="border-b pb-2 mb-2 flex justify-between items-center">
+                <h3 className="font-bold">{selectedGroup.name}</h3>
+                <Button size="sm" variant="outline" onClick={() => setMode('GROUPS')}>Back</Button>
+             </div>
+             <div className="h-[420px] overflow-y-auto bg-gray-50 p-4 rounded mb-4 space-y-3 chat-scroll-mini group-chat-scrollbar">
+                {activeMessages.map((m) => (
+                   <div key={m.id || m.timestamp} className={`p-2 rounded max-w-[80%] group text-black ${m.senderId === user.id ? 'ml-auto bg-indigo-100' : 'bg-white border'}`}>
+                      <div className="flex justify-between items-baseline gap-2">
+                         <span className="font-bold text-xs text-black">{m.senderName}</span>
+                         <div className="flex items-center gap-2">
+                           <span className="text-[10px] text-black/60">{new Date(m.timestamp).toLocaleTimeString()}</span>
+                           {m.senderId === user.id && (
+                             <button onClick={() => deleteMessage(m.id)} className="text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity">
+                               <Trash2 size={12} />
+                             </button>
+                           )}
+                         </div>
+                      </div>
+                      {m.message && <p className="text-sm text-black">{m.message}</p>}
+                      {m.fileData && m.fileName && (
+                        <a
+                          href={m.fileData}
+                          download={m.fileName}
+                          className="mt-1 inline-flex items-center gap-1 text-xs text-indigo-700 underline break-all"
+                        >
+                          <FileText size={12} /> {m.fileName}
+                        </a>
+                      )}
+                   </div>
+                ))}
+                <div ref={bottomRef} />
+             </div>
+             {selectedGroup.teacherId === user.id ? (
+               <>
+                 {pendingFile && (
+                   <div className="text-xs text-indigo-700 mb-2 px-1 flex items-center justify-between">
+                     <span className="truncate">Attachment: {pendingFile.fileName}</span>
+                     <button className="text-red-600" onClick={() => setPendingFile(null)}>Remove</button>
+                   </div>
+                 )}
+                 <div className="flex gap-2">
+                    <Input placeholder="Message..." value={message} onChange={e => setMessage(e.target.value)} className="mb-0 flex-1" />
+                    <label className="inline-flex items-center justify-center px-3 border rounded-lg cursor-pointer hover:bg-gray-50" title="Attach PPT/Word/Excel">
+                      <Paperclip size={16} />
+                      <input type="file" className="hidden" accept=".ppt,.pptx,.doc,.docx,.xls,.xlsx" onChange={handleAttachment} />
+                    </label>
+                    <Button onClick={sendMessage}><Send size={18}/></Button>
+                 </div>
+               </>
+             ) : (
+               <div className="p-2 bg-gray-100 text-xs text-center text-gray-500 rounded">
+                 Read Only Channel
+               </div>
+             )}
+          </div>
+       )}
     </Card>
   );
 };
@@ -454,20 +686,46 @@ const MarksManager = ({ onSuccess }) => {
 };
 
 // ... Include AddProjectForm, AssignProjectForm, ViewGuidesTable, ViewAssignmentsList, SubmittedProjectsList, UsersManagement, ChatMonitor from before (unchanged or minor tweaks) ...
-const AddProjectForm = ({ teachers, onSuccess, adminId }) => {
+const AddProjectForm = ({ onSuccess, adminId }) => {
   const [formData, setFormData] = useState({
-    title: '', description: '', department: '', guideId: '', dueDate: ''
+    title: '', description: '', department: '', dueDate: '', totalMarks: ''
   });
+  const [rubrics, setRubrics] = useState([]);
+  const [showRubricModal, setShowRubricModal] = useState(false);
+  const [rubricDraft, setRubricDraft] = useState({ title: '', maxMarks: '' });
+
+  const rubricTotal = rubrics.reduce((sum, r) => sum + (parseInt(r.maxMarks, 10) || 0), 0);
+
+  const addRubric = () => {
+    const title = rubricDraft.title.trim();
+    const maxMarks = parseInt(rubricDraft.maxMarks, 10);
+    if (!title) return alert('Rubric title is required.');
+    if (!Number.isFinite(maxMarks) || maxMarks <= 0) return alert('Rubric marks must be greater than 0.');
+    setRubrics(prev => [...prev, { id: `rb${Date.now()}${Math.random().toString(36).slice(2, 6)}`, title, maxMarks }]);
+    setRubricDraft({ title: '', maxMarks: '' });
+  };
+
+  const removeRubric = (id) => {
+    setRubrics(prev => prev.filter(r => r.id !== id));
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    const totalMarks = parseInt(formData.totalMarks, 10);
+    if (!Number.isFinite(totalMarks) || totalMarks <= 0) return alert('Total marks must be greater than 0.');
+    if (rubrics.length === 0) return alert('Please add at least one rubric.');
+    if (rubricTotal !== totalMarks) return alert(`Rubric marks total (${rubricTotal}) must equal total marks (${totalMarks}).`);
     const newProject = {
       id: `p${Date.now()}`,
       ...formData,
+      totalMarks,
+      rubrics: rubrics.map(r => ({ ...r, maxMarks: parseInt(r.maxMarks, 10) })),
       createdBy: adminId
     };
     await ApiService.addProject(newProject);
-    setFormData({ title: '', description: '', department: '', guideId: '', dueDate: '' });
+    setFormData({ title: '', description: '', department: '', dueDate: '', totalMarks: '' });
+    setRubrics([]);
+    setRubricDraft({ title: '', maxMarks: '' });
     onSuccess('Project added successfully!');
   };
 
@@ -498,13 +756,6 @@ const AddProjectForm = ({ teachers, onSuccess, adminId }) => {
             onChange={e => setFormData({...formData, department: e.target.value})}
             required
           />
-          <Select 
-            label="Guide (Teacher)"
-            options={teachers.map(t => ({ value: t.id, label: t.fullName }))}
-            value={formData.guideId}
-            onChange={e => setFormData({...formData, guideId: e.target.value})}
-            required
-          />
         </div>
         <Input 
           label="Due Date" 
@@ -513,21 +764,91 @@ const AddProjectForm = ({ teachers, onSuccess, adminId }) => {
           onChange={e => setFormData({...formData, dueDate: e.target.value})}
           required
         />
+        <Input
+          label="Total Marks"
+          type="number"
+          min="1"
+          value={formData.totalMarks}
+          onChange={e => setFormData({...formData, totalMarks: e.target.value})}
+          required
+        />
+
+        <div className="rounded-lg border border-indigo-200 bg-indigo-50/50 p-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-sm">
+              <div className="font-semibold text-indigo-700">Rubrics</div>
+              <div className="text-xs text-gray-600">
+                Added: {rubrics.length} | Assigned Total: {rubricTotal} / {formData.totalMarks || 0}
+              </div>
+            </div>
+            <Button type="button" variant="outline" onClick={() => setShowRubricModal(true)}>Configure Rubrics</Button>
+          </div>
+        </div>
         <Button type="submit" className="w-full">Save Project</Button>
       </form>
+
+      {showRubricModal && (
+        <div className="fixed inset-0 z-[120] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto p-5">
+            <div className="flex items-center justify-between mb-4">
+              <h4 className="font-bold text-lg">Project Rubrics</h4>
+              <Button size="sm" variant="outline" onClick={() => setShowRubricModal(false)}>Close</Button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mb-3">
+              <Input
+                label="Rubric Title"
+                placeholder="e.g. Problem Understanding"
+                value={rubricDraft.title}
+                onChange={e => setRubricDraft({ ...rubricDraft, title: e.target.value })}
+              />
+              <Input
+                label="Marks"
+                type="number"
+                min="1"
+                value={rubricDraft.maxMarks}
+                onChange={e => setRubricDraft({ ...rubricDraft, maxMarks: e.target.value })}
+              />
+              <div className="flex items-end">
+                <Button type="button" className="w-full" onClick={addRubric}>Add Rubric</Button>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              {rubrics.map(r => (
+                <div key={r.id} className="p-3 border rounded flex items-center justify-between">
+                  <div>
+                    <div className="font-semibold">{r.title}</div>
+                    <div className="text-xs text-gray-500">Max: {r.maxMarks}</div>
+                  </div>
+                  <button type="button" onClick={() => removeRubric(r.id)} className="text-red-600 hover:bg-red-50 p-2 rounded">
+                    <Trash2 size={16}/>
+                  </button>
+                </div>
+              ))}
+              {rubrics.length === 0 && <div className="text-center text-gray-500 py-4">No rubrics added yet.</div>}
+            </div>
+
+            <div className="mt-4 text-sm font-semibold">
+              Total Assigned: {rubricTotal} / {formData.totalMarks || 0}
+            </div>
+          </div>
+        </div>
+      )}
     </Card>
   );
 };
 
-const AssignProjectForm = ({ projects, groups, adminId, onSuccess }) => {
+const AssignProjectForm = ({ projects, groups, teachers, adminId, onSuccess }) => {
   const [selectedProject, setSelectedProject] = useState('');
   const [selectedGroup, setSelectedGroup] = useState('');
+  const [selectedGuide, setSelectedGuide] = useState('');
 
   const groupDetails = groups.find(g => g.id === selectedGroup);
 
   const handleAssign = async (e) => {
     e.preventDefault();
-    if (!selectedProject || !selectedGroup) return;
+    if (!selectedProject || !selectedGroup || !selectedGuide) return;
 
     const assignments = await ApiService.getAssignments();
     const existing = assignments.find(a => a.projectId === selectedProject && a.groupId === selectedGroup);
@@ -535,6 +856,13 @@ const AssignProjectForm = ({ projects, groups, adminId, onSuccess }) => {
         alert("This project is already assigned to this group.");
         return;
     }
+
+    const selectedProjectData = projects.find(p => p.id === selectedProject);
+    if (!selectedProjectData) return alert('Selected project not found.');
+    await ApiService.updateProject(selectedProject, {
+      ...selectedProjectData,
+      guideId: selectedGuide
+    });
 
     const assignment = {
       id: `a${Date.now()}`,
@@ -547,6 +875,7 @@ const AssignProjectForm = ({ projects, groups, adminId, onSuccess }) => {
     await ApiService.assignProject(assignment);
     setSelectedProject('');
     setSelectedGroup('');
+    setSelectedGuide('');
     onSuccess('Project assigned to group successfully!');
   };
 
@@ -569,6 +898,14 @@ const AssignProjectForm = ({ projects, groups, adminId, onSuccess }) => {
           required
         />
 
+        <Select
+          label="Select Guide (Teacher)"
+          options={teachers.map(t => ({ value: t.id, label: `${t.fullName} (${t.department})` }))}
+          value={selectedGuide}
+          onChange={e => setSelectedGuide(e.target.value)}
+          required
+        />
+
         {groupDetails && (
           <div className="bg-indigo-50 dark:bg-indigo-900/20 p-4 rounded-lg border border-indigo-100 dark:border-indigo-800">
             <h4 className="text-sm font-semibold text-indigo-800 dark:text-indigo-300 mb-2">Selected Group Details</h4>
@@ -581,7 +918,7 @@ const AssignProjectForm = ({ projects, groups, adminId, onSuccess }) => {
           </div>
         )}
 
-        <Button type="submit" className="w-full" disabled={!selectedProject || !selectedGroup}>
+        <Button type="submit" className="w-full" disabled={!selectedProject || !selectedGroup || !selectedGuide}>
           Assign Project
         </Button>
       </form>
@@ -633,7 +970,7 @@ const ViewGuidesTable = ({ assignments, groups, projects, teachers }) => {
   );
 };
 
-const ViewAssignmentsList = ({ assignments, groups, projects }) => {
+const ViewAssignmentsList = ({ assignments, groups, projects, onSuccess }) => {
    const data = assignments.map((a) => {
     const group = groups.find((g) => g.id === a.groupId);
     const project = projects.find((p) => p.id === a.projectId);
@@ -646,6 +983,12 @@ const ViewAssignmentsList = ({ assignments, groups, projects }) => {
     };
   });
 
+  const deleteAssigned = async (id) => {
+    if (!window.confirm('Delete this assignment?')) return;
+    await ApiService.deleteAssignment(id);
+    onSuccess?.('Assignment deleted successfully.');
+  };
+
   return (
     <Card title="All Project Assignments">
        <div className="table-wrapper">
@@ -656,6 +999,7 @@ const ViewAssignmentsList = ({ assignments, groups, projects }) => {
               <th>Assigned Group</th>
               <th>Due Date</th>
               <th>Status</th>
+              <th>Action</th>
             </tr>
           </thead>
           <tbody>
@@ -667,9 +1011,14 @@ const ViewAssignmentsList = ({ assignments, groups, projects }) => {
                 <td>
                   <Badge color={item.status === 'SUBMITTED' ? 'green' : 'yellow'}>{item.status}</Badge>
                 </td>
+                <td>
+                  <button onClick={() => deleteAssigned(item.id)} className="text-red-600 hover:bg-red-50 p-2 rounded">
+                    <Trash2 size={16}/>
+                  </button>
+                </td>
               </tr>
             )) : (
-               <tr><td colSpan={4} className="text-center">No active assignments.</td></tr>
+               <tr><td colSpan={5} className="text-center">No active assignments.</td></tr>
             )}
           </tbody>
         </table>

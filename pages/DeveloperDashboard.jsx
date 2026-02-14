@@ -106,7 +106,7 @@ const TopUsersAnalytics = () => {
     <Card title="Top Users (Highest API Usage)">
        <div className="overflow-x-auto">
           <table className="w-full text-sm text-left">
-             <thead className="bg-gray-50 uppercase">
+             <thead className="bg-gray-50 uppercase dark:text-black">
                 <tr>
                    <th className="px-6 py-3">Rank</th>
                    <th className="px-6 py-3">User</th>
@@ -116,7 +116,7 @@ const TopUsersAnalytics = () => {
              </thead>
              <tbody className="divide-y">
                 {users.map((u, i) => (
-                   <tr key={u.id} className="hover:bg-gray-50">
+                   <tr key={u.id} className="hover:bg-gray-50 dark:hover:bg-white dark:hover:text-black">
                       <td className="px-6 py-4 font-bold text-gray-500">#{i + 1}</td>
                       <td className="px-6 py-4">
                          <div className="font-bold">{u.fullName}</div>
@@ -141,6 +141,8 @@ const SystemMetrics = () => {
     ApiService.getMetrics().then(setMetrics);
   }, []);
 
+  const sortedRoutes = [...(metrics.routes || [])].sort((a, b) => (Number(b.count) || 0) - (Number(a.count) || 0));
+
   return (
     <div className="space-y-6">
        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -161,7 +163,7 @@ const SystemMetrics = () => {
        <Card title="Traffic by Route (Top Endpoints)">
           <div className="overflow-x-auto">
              <table className="w-full text-sm text-left">
-               <thead className="bg-gray-50 text-gray-700 uppercase">
+               <thead className="bg-gray-50 text-gray-700 uppercase dark:text-black">
                  <tr>
                     <th className="px-6 py-3">Route</th>
                     <th className="px-6 py-3">Method</th>
@@ -169,8 +171,8 @@ const SystemMetrics = () => {
                  </tr>
                </thead>
                <tbody className="divide-y">
-                 {metrics.routes.map((m, i) => (
-                   <tr key={i} className="hover:bg-gray-50">
+                 {sortedRoutes.map((m, i) => (
+                   <tr key={i} className="hover:bg-gray-50 dark:hover:bg-white dark:hover:text-black">
                       <td className="px-6 py-4 font-mono text-xs">{m.route}</td>
                       <td className="px-6 py-4"><Badge color={m.method === 'GET' ? 'blue' : 'green'}>{m.method}</Badge></td>
                       <td className="px-6 py-4 font-bold">{m.count}</td>
@@ -253,7 +255,7 @@ const DeveloperUserControl = () => {
              </div>
              <div className="overflow-x-auto max-h-[500px]">
                 <table className="w-full text-sm text-left">
-                   <thead className="bg-gray-50 uppercase sticky top-0">
+                   <thead className="bg-gray-50 uppercase sticky top-0 dark:text-black">
                       <tr>
                          <th className="px-4 py-2">Name</th>
                          <th className="px-4 py-2">Role</th>
@@ -302,7 +304,7 @@ const OnlineUsersMonitor = () => {
           {online.map(u => (
              <div key={u._id} className="p-4 border rounded-lg bg-white shadow-sm flex items-center justify-between">
                 <div>
-                   <div className="font-bold">{u.fullName}</div>
+                   <div className="font-bold dark:text-black">{u.fullName}</div>
                    <div className="text-xs text-gray-500">{u.username} | {u.role}</div>
                 </div>
                 <div className="status-badge status-online">

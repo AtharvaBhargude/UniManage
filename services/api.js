@@ -33,6 +33,7 @@ export const ApiService = {
   // Projects
   getProjects: () => fetchJson('/projects'),
   addProject: (data) => fetchJson('/projects', { method: 'POST', body: JSON.stringify(data) }),
+  updateProject: (id, data) => fetchJson(`/projects/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   
   // Groups (Project Groups)
   getGroups: () => fetchJson('/groups'),
@@ -47,11 +48,20 @@ export const ApiService = {
   addClassroomGroup: (data) => fetchJson('/classroom-groups', { method: 'POST', body: JSON.stringify(data) }),
   updateClassroomGroup: (id, data) => fetchJson(`/classroom-groups/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   deleteClassroomGroup: (id) => fetchJson(`/classroom-groups/${id}`, { method: 'DELETE' }),
+  getClassroomGroupMessages: (groupId, { since } = {}) => {
+    const params = new URLSearchParams();
+    if (since) params.append('since', since);
+    const query = params.toString();
+    return fetchJson(`/classroom-groups/${groupId}/messages${query ? `?${query}` : ''}`);
+  },
+  addClassroomGroupMessage: (groupId, data) => fetchJson(`/classroom-groups/${groupId}/messages`, { method: 'POST', body: JSON.stringify(data) }),
+  deleteClassroomGroupMessage: (groupId, messageId, requesterId) => fetchJson(`/classroom-groups/${groupId}/messages/${messageId}?requesterId=${encodeURIComponent(requesterId)}`, { method: 'DELETE' }),
 
   // Assignments
   getAssignments: () => fetchJson('/assignments'),
   assignProject: (data) => fetchJson('/assignments', { method: 'POST', body: JSON.stringify(data) }),
   updateAssignment: (id, data) => fetchJson(`/assignments/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteAssignment: (id) => fetchJson(`/assignments/${id}`, { method: 'DELETE' }),
 
   // Submissions
   getSubmissions: () => fetchJson('/submissions'),
@@ -59,7 +69,14 @@ export const ApiService = {
   deleteSubmission: (id) => fetchJson(`/submissions/${id}`, { method: 'DELETE' }),
   
   // Chats
-  getChats: () => fetchJson('/chats'),
+  getChats: ({ since, targetId, targetType } = {}) => {
+    const params = new URLSearchParams();
+    if (since) params.append('since', since);
+    if (targetId) params.append('targetId', targetId);
+    if (targetType) params.append('targetType', targetType);
+    const query = params.toString();
+    return fetchJson(`/chats${query ? `?${query}` : ''}`);
+  },
   addChat: (data) => fetchJson('/chats', { method: 'POST', body: JSON.stringify(data) }),
   deleteChat: (id) => fetchJson(`/chats/${id}`, { method: 'DELETE' }),
 

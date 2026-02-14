@@ -71,6 +71,16 @@ export const AuthPage = ({ onLogin }) => {
 
   return (
     <div className="auth-container">
+      <div className="auth-bubbles" aria-hidden="true">
+        <span className="bubble"></span>
+        <span className="bubble"></span>
+        <span className="bubble"></span>
+        <span className="bubble"></span>
+        <span className="bubble"></span>
+        <span className="bubble"></span>
+        <span className="bubble"></span>
+        <span className="bubble"></span>
+      </div>
       <Card className="auth-card">
         <div className="auth-header">
           <div className="auth-logo">

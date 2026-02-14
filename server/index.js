@@ -240,6 +240,81 @@ createCrud(TestViolation, 'violations');
 createCrud(MarkEntry, 'marks');
 createCrud(ClassroomGroup, 'classroom-groups');
 
+// Classroom group message routes (incremental sync + file support)
+app.get('/api/classroom-groups/:id/messages', async (req, res) => {
+  try {
+    const group = await ClassroomGroup.findOne({ id: req.params.id });
+    if (!group) return res.status(404).json({ error: 'Group not found' });
+    const since = req.query.since;
+    const messages = (group.messages || []).filter(m => !since || m.timestamp > since);
+    messages.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+    res.json(messages);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/classroom-groups/:id/messages', async (req, res) => {
+  try {
+    const group = await ClassroomGroup.findOne({ id: req.params.id });
+    if (!group) return res.status(404).json({ error: 'Group not found' });
+
+    const {
+      id,
+      senderId,
+      senderName,
+      role = 'TEACHER',
+      message = '',
+      fileName = '',
+      fileType = '',
+      fileData = '',
+      timestamp
+    } = req.body;
+
+    // Classroom group chat permission: only group teacher can send
+    if (senderId !== group.teacherId) {
+      return res.status(403).json({ error: 'Only group teacher can send classroom messages' });
+    }
+
+    const trimmedMessage = String(message).trim();
+    if (!trimmedMessage && !fileData) {
+      return res.status(400).json({ error: 'Message or file is required' });
+    }
+
+    const messageEntry = {
+      id: id || `cm${Date.now()}`,
+      senderId,
+      senderName,
+      role,
+      message: trimmedMessage,
+      fileName,
+      fileType,
+      fileData,
+      timestamp: timestamp || new Date().toISOString()
+    };
+
+    group.messages = [...(group.messages || []), messageEntry];
+    await group.save();
+    res.json(messageEntry);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/classroom-groups/:id/messages/:messageId', async (req, res) => {
+  try {
+    const group = await ClassroomGroup.findOne({ id: req.params.id });
+    if (!group) return res.status(404).json({ error: 'Group not found' });
+    const requesterId = req.query.requesterId;
+    if (requesterId !== group.teacherId) {
+      return res.status(403).json({ error: 'Only group teacher can delete classroom messages' });
+    }
+    const before = (group.messages || []).length;
+    group.messages = (group.messages || []).filter(m => m.id !== req.params.messageId);
+    if (group.messages.length === before) {
+      return res.status(404).json({ error: 'Message not found' });
+    }
+    await group.save();
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // Special Delete for Violations (Delete All)
 app.delete('/api/violations', async (req, res) => {
   try {
@@ -312,14 +387,25 @@ app.get('/api/users/online', async (req, res) => {
 // Chat routes (existing)
 app.get('/api/chats', async (req, res) => {
   try {
-    const chats = await Chat.find();
+    const { since, targetId, targetType } = req.query;
+    const query = {};
+    if (since) query.timestamp = { $gt: since };
+    if (targetId) query.targetId = targetId;
+    if (targetType) query.targetType = targetType;
+
+    const chats = await Chat.find(query).sort({ timestamp: 1 });
     const decryptedChats = chats.map(chat => ({
       id: chat.id,
       senderId: chat.senderId,
       senderName: chat.senderName,
       targetId: chat.targetId,
       targetType: chat.targetType,
-      message: decrypt({ content: chat.encryptedMessage, iv: chat.iv }),
+      message: chat.encryptedMessage && chat.iv
+        ? decrypt({ content: chat.encryptedMessage, iv: chat.iv })
+        : '',
+      fileName: chat.fileName || '',
+      fileType: chat.fileType || '',
+      fileData: chat.fileData || '',
       timestamp: chat.timestamp
     }));
     res.json(decryptedChats);
@@ -328,17 +414,28 @@ app.get('/api/chats', async (req, res) => {
 
 app.post('/api/chats', async (req, res) => {
   try {
-    const { message, ...chatData } = req.body;
-    const { content, iv } = encrypt(message);
+    const { message = '', fileName = '', fileType = '', fileData = '', ...chatData } = req.body;
+    if (fileData) {
+      return res.status(400).json({ error: 'File sharing is disabled in project guide chat' });
+    }
+    const trimmedMessage = String(message).trim();
+    if (!trimmedMessage) {
+      return res.status(400).json({ error: 'Message is required' });
+    }
+
+    const { content, iv } = encrypt(trimmedMessage);
     
     const chat = new Chat({
       ...chatData,
       encryptedMessage: content,
-      iv: iv
+      iv: iv,
+      fileName: '',
+      fileType: '',
+      fileData: ''
     });
     await chat.save();
     
-    res.json({ ...chatData, message });
+    res.json({ ...chatData, message: trimmedMessage, fileName: '', fileType: '', fileData: '' });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

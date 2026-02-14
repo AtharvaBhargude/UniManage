@@ -22,7 +22,13 @@ const ProjectSchema = new mongoose.Schema({
   department: String,
   guideId: String,
   dueDate: String,
-  createdBy: String
+  createdBy: String,
+  totalMarks: Number,
+  rubrics: [{
+    id: String,
+    title: String,
+    maxMarks: Number
+  }]
 });
 
 const StudentGroupSchema = new mongoose.Schema({
@@ -43,10 +49,14 @@ const ClassroomGroupSchema = new mongoose.Schema({
   teacherName: String,
   studentIds: [String], // Array of User IDs (Students & Other Teachers)
   messages: [{
+    id: String,
     senderId: String,
     senderName: String,
     role: String, // To identify if sender is Teacher/Student
     message: String,
+    fileName: String,
+    fileType: String,
+    fileData: String,
     timestamp: String
   }]
 });
@@ -79,6 +89,9 @@ const ChatSchema = new mongoose.Schema({
   targetType: { type: String, enum: ['GROUP', 'DIVISION'] },
   encryptedMessage: String,
   iv: String,
+  fileName: String,
+  fileType: String,
+  fileData: String,
   timestamp: String
 });
 
@@ -146,6 +159,11 @@ const MarkEntrySchema = new mongoose.Schema({
   adminMarks: Number,
   projectLink: String,
   rubrics: String, // Reason for marks
+  rubricScores: [{
+    title: String,
+    maxMarks: Number,
+    obtainedMarks: Number
+  }],
   progress: { type: Number, default: 0 } // Teacher's view/override
 });
 
