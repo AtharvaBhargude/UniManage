@@ -4,20 +4,71 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const bodyParser = require('body-parser');
 const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const rateLimit = require('express-rate-limit');
 const { 
   User, Project, StudentGroup, ClassroomGroup, Assignment, Submission, 
-  Chat, Quiz, TestAssignment, QuizResult, TestViolation, MarkEntry, Metric 
+  Chat, Quiz, TestAssignment, QuizResult, TestViolation, MarkEntry, ProjectIdea, Timetable, Report, Metric 
 } = require('./models');
 const { encrypt, decrypt } = require('./encryption');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/unimanage';
+const JWT_SECRET = process.env.JWT_SECRET || 'dev-only-secret-change-in-production';
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
 
 app.use(cors());
 app.use(bodyParser.json());
 
-// ✅ Updated connection (no deprecated options)
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 1000,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests. Try again later.' }
+});
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many authentication attempts. Try again later.' }
+});
+
+const createToken = (user) =>
+  jwt.sign(
+    { id: user.id, username: user.username, role: user.role },
+    JWT_SECRET,
+    { expiresIn: JWT_EXPIRES_IN }
+  );
+
+const authenticateToken = (req, res, next) => {
+  const authHeader = req.headers.authorization || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  if (!token) return res.status(401).json({ error: 'Missing authorization token' });
+
+  try {
+    const payload = jwt.verify(token, JWT_SECRET);
+    req.user = payload;
+    next();
+  } catch {
+    res.status(401).json({ error: 'Invalid or expired token' });
+  }
+};
+
+app.use('/api', apiLimiter);
+app.use('/api/auth/login', authLimiter);
+app.use('/api/auth/register', authLimiter);
+app.use('/api', (req, res, next) => {
+  if (req.path === '/auth/login' || req.path === '/auth/register') {
+    return next();
+  }
+  return authenticateToken(req, res, next);
+});
+
+// Updated connection (no deprecated options)
 mongoose.connect(MONGO_URI)
   .then(async () => {
     console.log('MongoDB Connected');
@@ -46,12 +97,14 @@ mongoose.connect(MONGO_URI)
 
 // Middleware to track activity and API metrics
 const trackActivityAndMetrics = async (req, res, next) => {
-    let uid = null;
+    let uid = req.user?.id || null;
     // 1. User Activity (guard req.body/req.query which may be undefined)
     const bodyUserId = req.body && req.body.userId;
     const queryUserId = req.query && req.query.userId;
-    if (bodyUserId || queryUserId) {
+    if (!uid && (bodyUserId || queryUserId)) {
       uid = bodyUserId || queryUserId;
+      try { await User.findOneAndUpdate({ id: uid }, { lastActive: new Date() }); } catch (e) { console.error('User update error', e); }
+    } else if (uid) {
       try { await User.findOneAndUpdate({ id: uid }, { lastActive: new Date() }); } catch (e) { console.error('User update error', e); }
     }
 
@@ -88,7 +141,8 @@ app.post('/api/auth/register', async (req, res) => {
     await user.save();
     
     const { password: _, ...userWithoutPass } = user.toObject();
-    res.json(userWithoutPass);
+    const token = createToken(userWithoutPass);
+    res.json({ ...userWithoutPass, token });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -119,7 +173,8 @@ app.post('/api/auth/login', async (req, res) => {
     await user.save();
 
     const { password: _, secondPassword: __, ...userWithoutPass } = user.toObject();
-    res.json(userWithoutPass);
+    const token = createToken(userWithoutPass);
+    res.json({ ...userWithoutPass, token });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -229,16 +284,224 @@ const createCrud = (Model, route) => {
   });
 };
 
+const normalizeText = (value) => String(value || '').trim().toLowerCase();
+const slotRangesOverlap = (aSlot, aDuration, bSlot, bDuration) => {
+  const aStart = Number(aSlot) || 0;
+  const aEnd = aStart + Math.max(1, Number(aDuration) || 1);
+  const bStart = Number(bSlot) || 0;
+  const bEnd = bStart + Math.max(1, Number(bDuration) || 1);
+  return aStart < bEnd && bStart < aEnd;
+};
+const findTeacherConflicts = (candidateTimetable, existingTimetables = []) => {
+  const candidateEntries = Array.isArray(candidateTimetable?.entries) ? candidateTimetable.entries : [];
+  const candidateId = String(candidateTimetable?.id || '');
+  const conflicts = [];
+
+  candidateEntries.forEach((entry) => {
+    const teacher = normalizeText(entry?.teacherName);
+    const day = normalizeText(entry?.day);
+    if (!teacher || !day) return;
+
+    for (const timetable of existingTimetables) {
+      if (String(timetable?.id || '') === candidateId) continue;
+      const rows = Array.isArray(timetable?.entries) ? timetable.entries : [];
+      for (const other of rows) {
+        if (normalizeText(other?.teacherName) !== teacher) continue;
+        if (normalizeText(other?.day) !== day) continue;
+        if (!slotRangesOverlap(entry?.slotIndex, entry?.duration, other?.slotIndex, other?.duration)) continue;
+        conflicts.push({
+          teacherName: entry.teacherName || other.teacherName || 'Unknown',
+          day: entry.day || other.day || '',
+          slotIndex: Number(entry.slotIndex) || 0,
+          duration: Math.max(1, Number(entry.duration) || 1),
+          conflictWith: {
+            timetableId: timetable.id,
+            department: timetable.department,
+            collegeYear: timetable.collegeYear,
+            semester: timetable.semester,
+            division: timetable.division,
+            slotIndex: Number(other.slotIndex) || 0,
+            duration: Math.max(1, Number(other.duration) || 1),
+            subjectName: other.subjectName || ''
+          }
+        });
+        return;
+      }
+    }
+  });
+
+  return conflicts;
+};
+
 createCrud(Project, 'projects');
-createCrud(StudentGroup, 'groups');
+// Student groups with sequential group numbers per dept/semester/division
+app.get('/api/groups', async (req, res) => {
+  try {
+    const items = await StudentGroup.find();
+    res.json(items);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+app.post('/api/groups', async (req, res) => {
+  try {
+    const payload = req.body || {};
+    const department = String(payload.department || '').trim();
+    const division = String(payload.division || '').trim();
+    const semester = Number(payload.semester || 0);
+    const collegeYear = Number(payload.collegeYear || 0);
+
+    const sameBucket = await StudentGroup.find({
+      department,
+      division,
+      semester
+    });
+    const maxGroupNo = (sameBucket || []).reduce((max, g) => Math.max(max, Number(g.groupNo) || 0), 0);
+    const groupNo = maxGroupNo + 1;
+
+    const item = new StudentGroup({
+      ...payload,
+      department,
+      division,
+      semester,
+      collegeYear,
+      groupNo
+    });
+    await item.save();
+    res.json(item);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+app.put('/api/groups/:id', async (req, res) => {
+  try {
+    const existing = await StudentGroup.findOne({ id: req.params.id });
+    if (!existing) return res.status(404).json({ error: 'Group not found' });
+    const payload = { ...req.body, groupNo: existing.groupNo };
+    const item = await StudentGroup.findOneAndUpdate({ id: req.params.id }, payload, { new: true });
+    res.json(item);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+app.delete('/api/groups/:id', async (req, res) => {
+  try {
+    const groupId = req.params.id;
+    const assignments = await Assignment.find({ groupId });
+    await StudentGroup.findOneAndDelete({ id: groupId });
+    await Assignment.deleteMany({ groupId });
+    const assignmentIds = assignments.map(a => a.id);
+    if (assignmentIds.length) {
+      await Submission.deleteMany({ assignmentId: { $in: assignmentIds } });
+      await ProjectIdea.deleteMany({ assignmentId: { $in: assignmentIds } });
+    }
+    await MarkEntry.deleteMany({ groupId });
+    await Chat.deleteMany({ targetType: 'GROUP', targetId: groupId });
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
 createCrud(Assignment, 'assignments');
 createCrud(Submission, 'submissions');
-createCrud(Quiz, 'quizzes');
 createCrud(TestAssignment, 'test-assignments');
 createCrud(QuizResult, 'results');
 createCrud(TestViolation, 'violations');
 createCrud(MarkEntry, 'marks');
+createCrud(ProjectIdea, 'project-ideas');
 createCrud(ClassroomGroup, 'classroom-groups');
+createCrud(Report, 'reports');
+
+// Timetable routes with cross-timetable teacher overlap validation
+app.get('/api/timetables', async (req, res) => {
+  try {
+    const rows = await Timetable.find();
+    res.json(rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/timetables', async (req, res) => {
+  try {
+    const payload = req.body || {};
+    const allTimetables = await Timetable.find();
+    const conflicts = findTeacherConflicts(payload, allTimetables);
+    if (conflicts.length > 0) {
+      return res.status(409).json({
+        error: 'Teacher timetable conflict detected. Same teacher cannot have overlapping lectures across timetables.',
+        conflicts
+      });
+    }
+
+    const item = new Timetable(payload);
+    await item.save();
+    res.json(item);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put('/api/timetables/:id', async (req, res) => {
+  try {
+    const existing = await Timetable.findOne({ id: req.params.id });
+    if (!existing) return res.status(404).json({ error: 'Timetable not found' });
+
+    const payload = { ...req.body, id: req.params.id };
+    const allTimetables = await Timetable.find();
+    const conflicts = findTeacherConflicts(payload, allTimetables);
+    if (conflicts.length > 0) {
+      return res.status(409).json({
+        error: 'Teacher timetable conflict detected. Same teacher cannot have overlapping lectures across timetables.',
+        conflicts
+      });
+    }
+
+    const updated = await Timetable.findOneAndUpdate({ id: req.params.id }, payload, { new: true });
+    res.json(updated);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/timetables/:id', async (req, res) => {
+  try {
+    await Timetable.findOneAndDelete({ id: req.params.id });
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Quiz routes with assignment sync and safe delete semantics
+app.get('/api/quizzes', async (req, res) => {
+  try {
+    const quizzes = await Quiz.find();
+    res.json(quizzes);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/quizzes', async (req, res) => {
+  try {
+    const quiz = new Quiz(req.body);
+    await quiz.save();
+    res.json(quiz);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put('/api/quizzes/:id', async (req, res) => {
+  try {
+    const existing = await Quiz.findOne({ id: req.params.id });
+    if (!existing) return res.status(404).json({ error: 'Quiz not found' });
+
+    const updated = await Quiz.findOneAndUpdate({ id: req.params.id }, req.body, { new: true });
+    if (updated && updated.title && updated.title !== existing.title) {
+      await TestAssignment.updateMany({ quizId: updated.id }, { quizTitle: updated.title });
+    }
+    res.json(updated);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/quizzes/:id', async (req, res) => {
+  try {
+    const quiz = await Quiz.findOneAndDelete({ id: req.params.id });
+    if (!quiz) return res.status(404).json({ error: 'Quiz not found' });
+
+    await QuizResult.updateMany(
+      { quizId: req.params.id, $or: [{ teacherId: { $exists: false } }, { teacherId: '' }, { teacherId: null }] },
+      { teacherId: quiz.createdBy }
+    );
+
+    // Remove assignments for deleted quiz from teacher/student assigned views.
+    // Keep results/submissions so they can be managed from Submitted tab.
+    await TestAssignment.deleteMany({ quizId: req.params.id });
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
 
 // Classroom group message routes (incremental sync + file support)
 app.get('/api/classroom-groups/:id/messages', async (req, res) => {
@@ -269,9 +532,10 @@ app.post('/api/classroom-groups/:id/messages', async (req, res) => {
       timestamp
     } = req.body;
 
-    // Classroom group chat permission: only group teacher can send
-    if (senderId !== group.teacherId) {
-      return res.status(403).json({ error: 'Only group teacher can send classroom messages' });
+    const isGroupOwner = senderId === group.teacherId;
+    const isJoinedMember = (group.studentIds || []).includes(senderId);
+    if (!isGroupOwner && !isJoinedMember) {
+      return res.status(403).json({ error: 'Only joined members can send classroom messages' });
     }
 
     const trimmedMessage = String(message).trim();
@@ -302,14 +566,16 @@ app.delete('/api/classroom-groups/:id/messages/:messageId', async (req, res) => 
     const group = await ClassroomGroup.findOne({ id: req.params.id });
     if (!group) return res.status(404).json({ error: 'Group not found' });
     const requesterId = req.query.requesterId;
-    if (requesterId !== group.teacherId) {
-      return res.status(403).json({ error: 'Only group teacher can delete classroom messages' });
-    }
-    const before = (group.messages || []).length;
-    group.messages = (group.messages || []).filter(m => m.id !== req.params.messageId);
-    if (group.messages.length === before) {
+    const target = (group.messages || []).find(m => m.id === req.params.messageId);
+    if (!target) {
       return res.status(404).json({ error: 'Message not found' });
     }
+    const isGroupOwner = requesterId === group.teacherId;
+    const isSender = requesterId === target.senderId;
+    if (!isGroupOwner && !isSender) {
+      return res.status(403).json({ error: 'Only sender or group owner can delete this message' });
+    }
+    group.messages = (group.messages || []).filter(m => m.id !== req.params.messageId);
     await group.save();
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -341,6 +607,23 @@ app.delete('/api/results/prune', async (req, res) => {
     await QuizResult.deleteMany({ id: { $in: toDelete } });
     
     res.json({ deletedCount: toDelete.length });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/results/bulk-delete', async (req, res) => {
+  try {
+    const { quizId, quizTitle, teacherId } = req.body || {};
+    if (!quizId && !quizTitle) {
+      return res.status(400).json({ error: 'quizId or quizTitle is required' });
+    }
+
+    const query = {};
+    if (quizId) query.quizId = quizId;
+    if (!quizId && quizTitle) query.quizTitle = quizTitle;
+    if (teacherId) query.teacherId = teacherId;
+
+    const out = await QuizResult.deleteMany(query);
+    res.json({ success: true, deletedCount: out.deletedCount || 0 });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -409,6 +692,14 @@ app.get('/api/chats', async (req, res) => {
       timestamp: chat.timestamp
     }));
     res.json(decryptedChats);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Delete all reports
+app.delete('/api/reports/all', async (req, res) => {
+  try {
+    await Report.deleteMany({});
+    res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

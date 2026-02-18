@@ -1,772 +1,1512 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Layout } from '../components/Layout.jsx';
 import { Card, Badge, Button, Input, Select } from '../components/UI.jsx';
 import { ApiService } from '../services/api.js';
-import { DIVISIONS, DEPARTMENTS } from '../constants.js';
-import { MessageCircle, CheckSquare, Send, Save, Trash2, Clock, PlayCircle, StopCircle, Plus, Users, ArrowRight, Key, AlertTriangle, ChevronLeft, Download, FileText, Link, Paperclip } from 'lucide-react';
+import { DEPARTMENTS, DIVISIONS, YEARS, getSemestersForYear } from '../constants.js';
+import { CheckSquare, Users, CalendarDays, Send, Trash2, PlayCircle, StopCircle, ChevronLeft, Pencil, Download } from 'lucide-react';
 
 const groupChatCacheKey = (groupId) => `group_chat_cache_${groupId}`;
 const groupChatSyncKey = (groupId) => `group_chat_sync_${groupId}`;
-const guideLastSeenKey = (teacherId, groupId) => `guide_last_seen_${teacherId}_${groupId}`;
-const classroomChatCacheKey = (groupId) => `classroom_chat_cache_${groupId}`;
-const classroomChatSyncKey = (groupId) => `classroom_chat_sync_${groupId}`;
-const classroomSeenKey = (teacherId, groupId) => `classroom_seen_${teacherId}_${groupId}`;
-const mergeChatsById = (existing, incoming) => {
-  const map = new Map(existing.map(c => [c.id, c]));
-  incoming.forEach(c => map.set(c.id, c));
-  return Array.from(map.values()).sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-};
-const isNearBottom = (el, threshold = 120) => {
-  if (!el) return true;
-  return (el.scrollHeight - el.scrollTop - el.clientHeight) <= threshold;
-};
-const latestTimestamp = (items) => {
-  if (!items || items.length === 0) return '';
-  return items[items.length - 1].timestamp || '';
+const merge = (a, b) => {
+  const m = new Map((a || []).map((x) => [x.id, x]));
+  (b || []).forEach((x) => m.set(x.id, x));
+  return Array.from(m.values()).sort((x, y) => new Date(x.timestamp) - new Date(y.timestamp));
 };
 
 export const TeacherDashboard = ({ user, onLogout }) => {
-  const [activeTab, setActiveTab] = useState('TEACHER');
-
+  const [tab, setTab] = useState('TEACHER');
   return (
     <Layout user={user} onLogout={onLogout} title="Teacher Dashboard">
-      <div className="teacher-nav">
-        <button
-          onClick={() => setActiveTab('TEACHER')}
-          className={`teacher-nav-btn ${activeTab === 'TEACHER' ? 'active' : ''}`}
-        >
-          Teacher Tab (Classroom)
-        </button>
-        <button
-          onClick={() => setActiveTab('GUIDE')}
-          className={`teacher-nav-btn ${activeTab === 'GUIDE' ? 'active' : ''}`}
-        >
-          Guide Tab (Projects)
-        </button>
-      </div>
-
-      <div className="animate-fadeIn">
-        {activeTab === 'TEACHER' ? <TeacherTab user={user} /> : <GuideTab user={user} />}
+      <div className="teacher-dashboard-surface">
+        <div className="teacher-nav">
+          <button onClick={() => setTab('TEACHER')} className={`teacher-nav-btn ${tab === 'TEACHER' ? 'active' : ''}`}>Teacher Tab (Classroom)</button>
+          <button onClick={() => setTab('GUIDE')} className={`teacher-nav-btn ${tab === 'GUIDE' ? 'active' : ''}`}>Guide Tab (Projects)</button>
+        </div>
+        {tab === 'TEACHER' ? <TeacherTab user={user} /> : <GuideTab user={user} />}
       </div>
     </Layout>
   );
 };
 
 const TeacherTab = ({ user }) => {
-  const [subTab, setSubTab] = useState('TEST');
-  
+  const [sub, setSub] = useState('TEST');
   return (
     <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
       <div className="lg:col-span-1 sub-menu">
-        <button onClick={() => setSubTab('TEST')} className={`sub-menu-btn ${subTab === 'TEST' ? 'active' : ''}`}>
-          <CheckSquare size={20} />
-          <span className="font-semibold">Test Management</span>
-        </button>
-        <button onClick={() => setSubTab('GROUPS')} className={`sub-menu-btn ${subTab === 'GROUPS' ? 'active' : ''}`}>
-          <Users size={20} />
-          <span className="font-semibold">Classroom Groups</span>
-        </button>
+        <button onClick={() => setSub('TEST')} className={`sub-menu-btn ${sub === 'TEST' ? 'active' : ''}`}><CheckSquare size={18}/> <span>Test Management</span></button>
+        <button onClick={() => setSub('TIMETABLE')} className={`sub-menu-btn ${sub === 'TIMETABLE' ? 'active' : ''}`}><CalendarDays size={18}/> <span>Timetable</span></button>
+        <button onClick={() => setSub('GROUPS')} className={`sub-menu-btn ${sub === 'GROUPS' ? 'active' : ''}`}><Users size={18}/> <span>Classroom Groups</span></button>
       </div>
-      
       <div className="lg:col-span-3">
-        {subTab === 'TEST' && <TestManager user={user} />}
-        {subTab === 'GROUPS' && <ClassroomGroupsManager user={user} />}
+        {sub === 'TEST' && <TestManager user={user} />}
+        {sub === 'TIMETABLE' && <TimetableManager user={user} />}
+        {sub === 'GROUPS' && <ClassroomGroupsManager user={user} />}
       </div>
     </div>
   );
 };
 
-const TestManager = ({ user }) => {
-  const [mode, setMode] = useState('CREATE'); // CREATE, ASSIGN, ASSIGNED, SUBMITTED, VIOLATIONS
+export const TestManager = ({ user }) => {
+  const [mode, setMode] = useState('CREATE');
   const [quizzes, setQuizzes] = useState([]);
   const [assignments, setAssignments] = useState([]);
   const [results, setResults] = useState([]);
   const [violations, setViolations] = useState([]);
-  const [selectedViolationTest, setSelectedViolationTest] = useState(null);
+  const [selectedViolationTest, setSelectedViolationTest] = useState('');
+  const [selectedSubmittedTest, setSelectedSubmittedTest] = useState('');
+  const [editingQuizId, setEditingQuizId] = useState('');
+  const [editingQuestionId, setEditingQuestionId] = useState('');
+  const [quiz, setQuiz] = useState({ title: '', timeLimit: 30, collegeYear: '', semester: '', questions: [] });
+  const [q, setQ] = useState({ text: '', o1: '', o2: '', o3: '', o4: '', c: '0' });
+  const [assignQuizId, setAssignQuizId] = useState('');
+  const [assignDept, setAssignDept] = useState(DEPARTMENTS[0]);
+  const [assignDiv, setAssignDiv] = useState(DIVISIONS[0]);
+  const [submittedFilters, setSubmittedFilters] = useState({
+    department: 'ALL',
+    division: 'ALL',
+    collegeYear: 'ALL',
+    semester: 'ALL'
+  });
+  const emptyQuiz = { title: '', timeLimit: 30, collegeYear: '', semester: '', questions: [] };
+  const emptyQuestion = { text: '', o1: '', o2: '', o3: '', o4: '', c: '0' };
+
+  const refresh = async () => {
+    const [allQ, allA, allR, allV] = await Promise.all([ApiService.getQuizzes(), ApiService.getTestAssignments(), ApiService.getQuizResults(), ApiService.getViolations()]);
+    const mine = (allQ || []).filter((x) => x.createdBy === user.id);
+    setQuizzes(mine);
+    setAssignments((allA || []).filter((x) => x.assignedBy === user.id));
+    setResults((allR || []).filter((x) => x.teacherId === user.id || mine.some((qz) => qz.id === x.quizId)));
+    setViolations((allV || []).filter((x) => mine.some((qz) => qz.title === x.testName)));
+  };
+  useEffect(() => { refresh(); }, []);
 
   useEffect(() => {
-    refreshData();
-  }, [mode]);
-
-  const refreshData = async () => {
-    const [allQuizzes, allAssignments] = await Promise.all([
-      ApiService.getQuizzes(),
-      ApiService.getTestAssignments()
-    ]);
-    const teacherQuizzes = allQuizzes.filter(q => q.createdBy === user.id);
-    setQuizzes(teacherQuizzes);
-    setAssignments(allAssignments.filter(a => a.assignedBy === user.id));
-    
-    if (mode === 'SUBMITTED') {
-      const res = await ApiService.getQuizResults();
-      const myQuizIds = teacherQuizzes.map(q => q.id);
-      setResults(res.filter(r => myQuizIds.includes(r.quizId)));
+    if (assignQuizId && !quizzes.some((z) => z.id === assignQuizId)) {
+      setAssignQuizId('');
     }
+  }, [assignQuizId, quizzes]);
 
-    if (mode === 'VIOLATIONS') {
-      const allViolations = await ApiService.getViolations();
-      // Filter violations based on matching test names
-      const myTitles = teacherQuizzes.map(q => q.title);
-      setViolations(allViolations.filter(v => myTitles.includes(v.testName)));
+  const addQuestion = () => {
+    if (!q.text || !q.o1) return;
+    const nextQuestion = { id: editingQuestionId || `q${Date.now()}`, text: q.text, options: [q.o1, q.o2, q.o3, q.o4], correctOption: Number(q.c) };
+    setQuiz((p) => ({
+      ...p,
+      questions: editingQuestionId
+        ? p.questions.map((item) => (item.id === editingQuestionId ? nextQuestion : item))
+        : [...p.questions, nextQuestion]
+    }));
+    setQ(emptyQuestion);
+    setEditingQuestionId('');
+  };
+
+  const editQuestion = (question) => {
+    setEditingQuestionId(question.id);
+    setQ({
+      text: question.text || '',
+      o1: question.options?.[0] || '',
+      o2: question.options?.[1] || '',
+      o3: question.options?.[2] || '',
+      o4: question.options?.[3] || '',
+      c: String(Number(question.correctOption) || 0)
+    });
+  };
+
+  const removeQuestion = (questionId) => {
+    setQuiz((prev) => ({ ...prev, questions: prev.questions.filter((item) => item.id !== questionId) }));
+    if (editingQuestionId === questionId) {
+      setEditingQuestionId('');
+      setQ(emptyQuestion);
     }
   };
 
-  const deleteStudentViolations = async (testName, studentName) => {
-    const rows = violations.filter(v => v.testName === testName && v.studentName === studentName);
-    if (rows.length === 0) return;
-    if (!window.confirm(`Delete all ${rows.length} violations for ${studentName}?`)) return;
-    await Promise.all(rows.map(v => ApiService.deleteViolation(v.id)));
-    refreshData();
+  const resetQuizEditor = () => {
+    setEditingQuizId('');
+    setEditingQuestionId('');
+    setQuiz(emptyQuiz);
+    setQ(emptyQuestion);
   };
 
-  const deleteAllViolations = async () => {
-    if(!window.confirm("Are you sure you want to delete ALL violation records? This cannot be undone.")) return;
-    await ApiService.deleteAllViolations();
-    refreshData();
+  const openQuizForEdit = (existingQuiz) => {
+    setEditingQuizId(existingQuiz.id);
+    setEditingQuestionId('');
+    setQ(emptyQuestion);
+    setQuiz({
+      title: existingQuiz.title || '',
+      timeLimit: Number(existingQuiz.timeLimit) || 30,
+      collegeYear: String(existingQuiz.collegeYear || ''),
+      semester: String(existingQuiz.semester || ''),
+      questions: existingQuiz.questions || []
+    });
   };
+
+  const saveQuiz = async () => {
+    if (!quiz.title || !quiz.questions.length || !quiz.collegeYear || !quiz.semester) return;
+    const payload = {
+      ...quiz,
+      timeLimit: Number(quiz.timeLimit),
+      collegeYear: Number(quiz.collegeYear),
+      semester: Number(quiz.semester)
+    };
+    if (editingQuizId) {
+      await ApiService.updateQuiz(editingQuizId, payload);
+    } else {
+      await ApiService.addQuiz({ id: `qz${Date.now()}`, createdBy: user.id, ...payload });
+    }
+    resetQuizEditor();
+    refresh();
+  };
+
+  const assignQuiz = async () => {
+    const z = quizzes.find((x) => x.id === assignQuizId); if (!z) return;
+    await ApiService.assignTest({ id: `ta${Date.now()}`, quizId: z.id, quizTitle: z.title, assignedBy: user.id, department: assignDept, division: assignDiv, assignedDate: new Date().toISOString(), isActive: false });
+    alert('Test assigned successfully.');
+    refresh();
+  };
+
+  const submittedTests = useMemo(() => {
+    const map = new Map();
+    (results || []).forEach((result) => {
+      const key = result.quizId || result.quizTitle;
+      if (!key) return;
+      const prev = map.get(key);
+      if (!prev) {
+        map.set(key, {
+          key,
+          quizId: result.quizId,
+          title: result.quizTitle || 'Untitled Test',
+          count: 1,
+          latestDate: result.date
+        });
+      } else {
+        prev.count += 1;
+        if (new Date(result.date || 0) > new Date(prev.latestDate || 0)) prev.latestDate = result.date;
+      }
+    });
+    return Array.from(map.values()).sort((a, b) => new Date(b.latestDate || 0) - new Date(a.latestDate || 0));
+  }, [results]);
+
+  const selectedSubmittedRows = useMemo(() => {
+    if (!selectedSubmittedTest) return [];
+    return (results || []).filter((r) => (r.quizId || r.quizTitle) === selectedSubmittedTest);
+  }, [results, selectedSubmittedTest]);
+
+  const filteredSubmittedRows = useMemo(() => {
+    return selectedSubmittedRows.filter((row) => {
+      if (submittedFilters.department !== 'ALL' && row.department !== submittedFilters.department) return false;
+      if (submittedFilters.division !== 'ALL' && row.division !== submittedFilters.division) return false;
+      if (submittedFilters.collegeYear !== 'ALL' && String(row.collegeYear || '') !== submittedFilters.collegeYear) return false;
+      if (submittedFilters.semester !== 'ALL' && String(row.semester || '') !== submittedFilters.semester) return false;
+      return true;
+    });
+  }, [selectedSubmittedRows, submittedFilters]);
+
+  const submittedFilterOptions = useMemo(() => {
+    const getValues = (extractor) => [...new Set(selectedSubmittedRows.map(extractor).filter((v) => v !== undefined && v !== null && String(v).trim() !== ''))];
+    return {
+      departments: getValues((row) => row.department),
+      divisions: getValues((row) => row.division),
+      years: getValues((row) => String(row.collegeYear)).sort((a, b) => Number(a) - Number(b)),
+      semesters: getValues((row) => String(row.semester)).sort((a, b) => Number(a) - Number(b))
+    };
+  }, [selectedSubmittedRows]);
+
+  const clearSubmittedFilters = () => {
+    setSubmittedFilters({ department: 'ALL', division: 'ALL', collegeYear: 'ALL', semester: 'ALL' });
+  };
+
+  const escapeCsv = (value) => `"${String(value ?? '').replace(/"/g, '""')}"`;
+  const exportSubmittedCsv = () => {
+    if (!filteredSubmittedRows.length) return;
+    const header = ['Student Name', 'PRN', 'Department', 'Division', 'Year', 'Semester', 'Test Name', 'Score', 'Total Questions', 'Submission Type', 'Submitted At'];
+    const rows = filteredSubmittedRows.map((row) => ([
+      row.studentName,
+      row.prn,
+      row.department,
+      row.division,
+      row.collegeYear,
+      row.semester,
+      row.quizTitle,
+      row.score,
+      row.totalQuestions,
+      row.submissionType || 'NORMAL',
+      row.date ? new Date(row.date).toLocaleString() : ''
+    ]));
+    const csvText = [header, ...rows].map((line) => line.map(escapeCsv).join(',')).join('\n');
+    const blob = new Blob([csvText], { type: 'text/csv;charset=utf-8;' });
+    const selected = submittedTests.find((x) => x.key === selectedSubmittedTest);
+    const safeTitle = String(selected?.title || 'test').replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '').toLowerCase();
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `${safeTitle || 'test'}_submissions.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(link.href);
+  };
+
+  const removeQuizAndAssignments = async (quizId) => {
+    await ApiService.deleteQuiz(quizId);
+    if (selectedSubmittedTest === quizId) setSelectedSubmittedTest('');
+    if (editingQuizId === quizId) resetQuizEditor();
+    refresh();
+  };
+
+  const removeAllSubmittedForTest = async (testMeta) => {
+    if (!testMeta) return;
+    const targetCount = (results || []).filter((r) => (r.quizId || r.quizTitle) === testMeta.key).length;
+    if (!targetCount) return;
+    if (!window.confirm('All submitted data for this test will be deleted.')) return;
+    await ApiService.deleteQuizResultsBulk({
+      quizId: testMeta.quizId || '',
+      quizTitle: testMeta.title || '',
+      teacherId: user.id
+    });
+    if (selectedSubmittedTest === testMeta.key) setSelectedSubmittedTest('');
+    clearSubmittedFilters();
+    refresh();
+  };
+
+  const selectedSubmittedMeta = submittedTests.find((x) => x.key === selectedSubmittedTest);
 
   return (
-    <Card>
+    <Card className="teacher-test-management">
       <div className="flex border-b mb-4 overflow-x-auto">
-        {['CREATE', 'ASSIGN', 'ASSIGNED', 'SUBMITTED', 'VIOLATIONS'].map(m => (
-          <button 
-            key={m} 
-            onClick={() => { setMode(m); setSelectedViolationTest(null); }}
-            className={`flex-1 py-2 px-4 text-sm font-semibold whitespace-nowrap transition-colors ${mode === m ? 'text-indigo-600 border-b-2 border-indigo-600' : 'text-gray-500 hover:text-gray-700'}`}
+        {['CREATE', 'ASSIGN', 'ASSIGNED', 'SUBMITTED', 'VIOLATIONS'].map((m) => (
+          <button
+            key={m}
+            onClick={() => {
+              setMode(m);
+              setSelectedViolationTest('');
+              if (m !== 'SUBMITTED') {
+                setSelectedSubmittedTest('');
+                clearSubmittedFilters();
+              }
+            }}
+            className={`flex-1 py-2 px-4 text-sm font-semibold ${mode === m ? 'text-indigo-600 border-b-2 border-indigo-600' : 'text-gray-600'}`}
           >
             {m}
           </button>
         ))}
       </div>
 
-      {mode === 'CREATE' && <QuizCreator user={user} quizzes={quizzes} onCreated={() => { refreshData(); }} />}
-      {mode === 'ASSIGN' && <QuizAssigner quizzes={quizzes} user={user} onAssigned={() => { refreshData(); setMode('ASSIGNED'); }} />}
-      {mode === 'ASSIGNED' && <AssignedTestsList assignments={assignments} onUpdate={refreshData} />}
-      {mode === 'SUBMITTED' && <TestResultsList results={results} onUpdate={refreshData} />}
-      
-      {mode === 'VIOLATIONS' && (
-        !selectedViolationTest ? (
-          <div className="space-y-4">
-             <div className="flex justify-between items-center">
-               <h3 className="font-bold text-gray-700">Tests with Violations</h3>
-               {violations.length > 0 && (
-                 <Button variant="danger" size="sm" onClick={deleteAllViolations}>
-                   <Trash2 size={16}/> Delete All
-                 </Button>
-               )}
-             </div>
-             {(() => {
-                const uniqueTests = [...new Set(violations.map(v => v.testName))];
-                if (uniqueTests.length === 0) return <p className="text-gray-500 text-center py-4">No violations recorded.</p>;
-                return (
-                  <div className="grid gap-3">
-                    {uniqueTests.map(testName => {
-                       const count = violations.filter(v => v.testName === testName).length;
-                       return (
-                         <div key={testName} onClick={() => setSelectedViolationTest(testName)} className="p-4 border rounded hover:bg-gray-50 cursor-pointer flex justify-between items-center">
-                            <span className="font-bold">{testName}</span>
-                            <Badge color="red">{count} Violations</Badge>
-                         </div>
-                       );
-                    })}
-                  </div>
-                );
-             })()}
+      {mode === 'CREATE' && (
+        <div className="space-y-4">
+          <h4 className="font-semibold text-black">{editingQuizId ? 'Edit Quiz' : 'Add Question'}</h4>
+          <Input label="Quiz Title" value={quiz.title} onChange={(e) => setQuiz({ ...quiz, title: e.target.value })} />
+          <div className="grid grid-cols-2 gap-2">
+            <Input label="Year" value={quiz.collegeYear} onChange={(e) => setQuiz({ ...quiz, collegeYear: e.target.value })} />
+            <Input label="Semester" value={quiz.semester} onChange={(e) => setQuiz({ ...quiz, semester: e.target.value })} />
+          </div>
+          <Input label="Time Limit (Minutes)" type="number" value={quiz.timeLimit} onChange={(e) => setQuiz({ ...quiz, timeLimit: e.target.value })} />
+          <Input label="Question" value={q.text} onChange={(e) => setQ({ ...q, text: e.target.value })} />
+          <div className="grid grid-cols-2 gap-2">
+            <Input placeholder="Option 1" value={q.o1} onChange={(e) => setQ({ ...q, o1: e.target.value })} />
+            <Input placeholder="Option 2" value={q.o2} onChange={(e) => setQ({ ...q, o2: e.target.value })} />
+            <Input placeholder="Option 3" value={q.o3} onChange={(e) => setQ({ ...q, o3: e.target.value })} />
+            <Input placeholder="Option 4" value={q.o4} onChange={(e) => setQ({ ...q, o4: e.target.value })} />
+          </div>
+          <Select label="Correct" options={[0, 1, 2, 3].map((i) => ({ value: String(i), label: `Option ${i + 1}` }))} value={q.c} onChange={(e) => setQ({ ...q, c: e.target.value })} />
+          <div className="flex gap-2">
+            <Button onClick={addQuestion} variant="secondary" className="text-black">{editingQuestionId ? 'Update Question' : 'Add Question'}</Button>
+            {editingQuestionId && <Button onClick={() => { setEditingQuestionId(''); setQ(emptyQuestion); }} variant="outline">Cancel Question Edit</Button>}
+          </div>
+          <div className="text-black font-semibold">Questions ({quiz.questions.length})</div>
+          <div className="space-y-2">
+            {(quiz.questions || []).map((question, idx) => (
+              <div key={question.id} className="p-3 border rounded bg-white text-black flex justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="font-semibold truncate">{idx + 1}. {question.text}</div>
+                  <div className="text-xs text-gray-500">Correct: Option {(Number(question.correctOption) || 0) + 1}</div>
+                </div>
+                <div className="flex gap-2 shrink-0">
+                  <button className="text-indigo-600" onClick={() => editQuestion(question)}><Pencil size={14} /></button>
+                  <button className="text-red-600" onClick={() => removeQuestion(question.id)}><Trash2 size={14} /></button>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="flex gap-2">
+            <Button onClick={saveQuiz}>{editingQuizId ? 'Update Quiz Template' : 'Create Quiz Template'}</Button>
+            {editingQuizId && <Button variant="outline" onClick={resetQuizEditor}>Cancel Quiz Edit</Button>}
+          </div>
+
+          <h4 className="font-semibold text-black mt-4">My Created Quizzes</h4>
+          <div className="space-y-2">
+            {quizzes.map((z) => (
+              <div
+                key={z.id}
+                className={`p-2 border rounded bg-white text-black flex justify-between items-center cursor-pointer ${editingQuizId === z.id ? 'border-indigo-500 ring-1 ring-indigo-300' : ''}`}
+                onClick={() => openQuizForEdit(z)}
+              >
+                <div>
+                  <div className="font-semibold">{z.title}</div>
+                  <div className="text-xs text-gray-500">Year {z.collegeYear} | Sem {z.semester} | {z.questions?.length || 0} Questions</div>
+                </div>
+                <button
+                  className="text-red-600"
+                  onClick={async (e) => {
+                    e.stopPropagation();
+                    await removeQuizAndAssignments(z.id);
+                  }}
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {mode === 'ASSIGN' && (
+        <div className="space-y-3 max-w-xl">
+          <Select label="Quiz" options={quizzes.map((z) => ({ value: z.id, label: z.title }))} value={assignQuizId} onChange={(e) => setAssignQuizId(e.target.value)} />
+          <div className="grid grid-cols-2 gap-2">
+            <Select label="Department" options={DEPARTMENTS.map((d) => ({ value: d, label: d }))} value={assignDept} onChange={(e) => setAssignDept(e.target.value)} />
+            <Select label="Division" options={DIVISIONS.map((d) => ({ value: d, label: d }))} value={assignDiv} onChange={(e) => setAssignDiv(e.target.value)} />
+          </div>
+          <Button onClick={assignQuiz}>Assign</Button>
+        </div>
+      )}
+
+      {mode === 'ASSIGNED' && (
+        <div className="space-y-2">
+          {assignments.map((a) => (
+            <div key={a.id} className="p-3 border rounded bg-white text-black flex justify-between items-center">
+              <div>
+                <div className="font-semibold">{a.quizTitle}</div>
+                <div className="text-xs text-gray-500">{a.department} - {a.division}</div>
+              </div>
+              <div className="flex gap-2">
+                <Button size="sm" variant={a.isActive ? 'danger' : 'primary'} onClick={async () => { await ApiService.updateTestAssignment(a.id, { isActive: !a.isActive }); refresh(); }}>
+                  {a.isActive ? <><StopCircle size={14} />Stop</> : <><PlayCircle size={14} />Start</>}
+                </Button>
+                <button className="text-red-600" onClick={async () => { await ApiService.deleteTestAssignment(a.id); refresh(); }}><Trash2 size={14} /></button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {mode === 'SUBMITTED' && (
+        !selectedSubmittedTest ? (
+          <div className="space-y-2">
+            <div className="font-bold text-black">Submitted Tests</div>
+            {submittedTests.length === 0 && <div className="text-sm text-gray-500">No submissions yet.</div>}
+            {submittedTests.map((test) => (
+              <div key={test.key} className="p-3 border rounded hover:bg-gray-50 cursor-pointer flex justify-between items-center text-black" onClick={() => { setSelectedSubmittedTest(test.key); clearSubmittedFilters(); }}>
+                <span className="font-semibold">{test.title}</span>
+                <div className="flex items-center gap-2">
+                  <Badge color="blue">{test.count}</Badge>
+                  <button
+                    className="text-red-600"
+                    title="Delete all submitted data for this test"
+                    onClick={async (e) => {
+                      e.stopPropagation();
+                      await removeAllSubmittedForTest(test);
+                    }}
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              </div>
+            ))}
           </div>
         ) : (
-          <div>
-             <div className="flex items-center gap-2 mb-4">
-               <button onClick={() => setSelectedViolationTest(null)} className="p-1 hover:bg-gray-100 rounded"><ChevronLeft/></button>
-               <h3 className="font-bold text-lg">{selectedViolationTest} - Violations</h3>
-             </div>
-             <div className="table-wrapper">
-               <table className="w-full text-sm text-left">
-                 <thead className="bg-red-50 text-xs uppercase text-red-700">
-                   <tr>
-                     <th className="px-4 py-2">Student</th>
-                     <th className="px-4 py-2">Violation Count</th>
-                     <th className="px-4 py-2">Latest Timestamp</th>
-                     <th className="px-4 py-2">Action</th>
-                   </tr>
-                 </thead>
-                 <tbody>
-                   {(() => {
-                     const grouped = violations
-                       .filter(v => v.testName === selectedViolationTest)
-                       .reduce((acc, v) => {
-                         const key = v.studentName || 'Unknown';
-                         if (!acc[key]) {
-                           acc[key] = { studentName: key, count: 0, latestTimestamp: v.timestamp || '', lastId: v.id };
-                         }
-                         acc[key].count += 1;
-                         if (v.timestamp && (!acc[key].latestTimestamp || new Date(v.timestamp) > new Date(acc[key].latestTimestamp))) {
-                           acc[key].latestTimestamp = v.timestamp;
-                           acc[key].lastId = v.id;
-                         }
-                         return acc;
-                       }, {});
-                     return Object.values(grouped).map(row => (
-                       <tr key={row.lastId} className="border-b border-red-100 hover:bg-red-50">
-                         <td className="px-4 py-2 font-medium text-red-900">{row.studentName}</td>
-                         <td className="px-4 py-2 text-xs text-red-600">{row.count}</td>
-                         <td className="px-4 py-2 text-xs text-red-600">{row.latestTimestamp ? new Date(row.latestTimestamp).toLocaleString() : '-'}</td>
-                         <td>
-                           <button onClick={() => deleteStudentViolations(selectedViolationTest, row.studentName)} className="text-red-600 hover:text-red-800">
-                             <Trash2 size={16}/>
-                           </button>
-                         </td>
-                       </tr>
-                     ));
-                   })()}
-                 </tbody>
-               </table>
-             </div>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <button className="text-black dark:text-white" onClick={() => setSelectedSubmittedTest('')}><ChevronLeft /></button>
+                <div className="font-bold text-black">{selectedSubmittedMeta?.title || 'Submitted Test'} - Submissions</div>
+              </div>
+              <div className="flex gap-2">
+                <Button size="sm" variant="outline" onClick={exportSubmittedCsv} disabled={!filteredSubmittedRows.length}><Download size={14} />Export CSV</Button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 lg:grid-cols-5 gap-2">
+              <Select label="Department" options={[{ value: 'ALL', label: 'All' }, ...submittedFilterOptions.departments.map((v) => ({ value: v, label: v }))]} value={submittedFilters.department} onChange={(e) => setSubmittedFilters((prev) => ({ ...prev, department: e.target.value }))} />
+              <Select label="Division" options={[{ value: 'ALL', label: 'All' }, ...submittedFilterOptions.divisions.map((v) => ({ value: v, label: v }))]} value={submittedFilters.division} onChange={(e) => setSubmittedFilters((prev) => ({ ...prev, division: e.target.value }))} />
+              <Select label="Year" options={[{ value: 'ALL', label: 'All' }, ...submittedFilterOptions.years.map((v) => ({ value: v, label: v }))]} value={submittedFilters.collegeYear} onChange={(e) => setSubmittedFilters((prev) => ({ ...prev, collegeYear: e.target.value }))} />
+              <Select label="Semester" options={[{ value: 'ALL', label: 'All' }, ...submittedFilterOptions.semesters.map((v) => ({ value: v, label: v }))]} value={submittedFilters.semester} onChange={(e) => setSubmittedFilters((prev) => ({ ...prev, semester: e.target.value }))} />
+              <div className="ui-input-wrapper">
+                <label className="ui-label opacity-0 select-none">Clear</label>
+                <Button variant="secondary" className="text-black w-full" onClick={clearSubmittedFilters}>Clear Filters</Button>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm text-left">
+                <thead className="bg-gray-50 text-xs uppercase text-black">
+                  <tr>
+                    <th className="px-3 py-2">Student</th>
+                    <th className="px-3 py-2">Department</th>
+                    <th className="px-3 py-2">Division</th>
+                    <th className="px-3 py-2">Year</th>
+                    <th className="px-3 py-2">Semester</th>
+                    <th className="px-3 py-2">Score</th>
+                    <th className="px-3 py-2">Submitted At</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredSubmittedRows.map((r) => (
+                    <tr key={r.id} className="border-b text-black">
+                      <td className="px-3 py-2">{r.studentName}</td>
+                      <td className="px-3 py-2">{r.department || '-'}</td>
+                      <td className="px-3 py-2">{r.division || '-'}</td>
+                      <td className="px-3 py-2">{r.collegeYear || '-'}</td>
+                      <td className="px-3 py-2">{r.semester || '-'}</td>
+                      <td className="px-3 py-2">{r.score}/{r.totalQuestions}</td>
+                      <td className="px-3 py-2">{r.date ? new Date(r.date).toLocaleString() : '-'}</td>
+                    </tr>
+                  ))}
+                  {filteredSubmittedRows.length === 0 && (
+                    <tr>
+                      <td colSpan={7} className="px-3 py-6 text-center text-gray-500">No matching submissions.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         )
+      )}
+
+      {mode === 'VIOLATIONS' && (!selectedViolationTest ? <div className="space-y-2"><div className="font-bold text-black">Tests with Violations</div>{[...new Set(violations.map((v)=>v.testName))].map((t)=><div key={t} className="p-3 border rounded hover:bg-gray-50 cursor-pointer flex justify-between text-black" onClick={()=>setSelectedViolationTest(t)}><span>{t}</span><Badge color="red">{violations.filter((v)=>v.testName===t).length}</Badge></div>)}</div> : <div><div className="flex items-center gap-2 mb-2"><button className="text-black dark:text-white" onClick={()=>setSelectedViolationTest('')}><ChevronLeft/></button><div className="font-bold text-black">{selectedViolationTest} - Violations</div></div><div className="space-y-1">{Object.entries(violations.filter((v)=>v.testName===selectedViolationTest).reduce((a,v)=>{a[v.studentName]=(a[v.studentName]||0)+1;return a;},{})).map(([name,c])=><div key={name} className="p-2 border rounded flex justify-between text-black"><span>{name}</span><span>{c}</span></div>)}</div></div>)}
+    </Card>
+  );
+};
+
+const TIMETABLE_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+const TIMETABLE_SLOT_HOURS = [9, 10, 11, 12, 13, 14, 15, 16];
+const formatHour12 = (hour24) => {
+  const period = hour24 >= 12 ? 'PM' : 'AM';
+  const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
+  return `${hour12}:00 ${period}`;
+};
+const TIMETABLE_SLOTS = TIMETABLE_SLOT_HOURS.map((h) => `${formatHour12(h)} - ${formatHour12(h + 1)}`);
+const timetableKey = (x) => `${x.department}|${x.collegeYear}|${x.semester}|${x.division}`;
+const slotKey = (day, slotIndex) => `${day}|${slotIndex}`;
+const teacherTimetablesCacheKey = (userId) => `teacher_timetables_cache_${userId}`;
+const cloneEntries = (rows) => (rows || []).map((x) => ({ ...x }));
+const dayIndex = (day) => TIMETABLE_DAYS.indexOf(day);
+const overlaps = (entry, day, slotIndex, duration) => {
+  if (entry.day !== day) return false;
+  const a1 = Number(entry.slotIndex);
+  const a2 = a1 + Math.max(1, Number(entry.duration) || 1) - 1;
+  const b1 = Number(slotIndex);
+  const b2 = b1 + Math.max(1, Number(duration) || 1) - 1;
+  return !(b2 < a1 || b1 > a2);
+};
+const canPlaceEntry = (entries, movingEntry, day, slotIndex, lunchSlotIndex, ignoreBlockId) => {
+  const duration = Math.max(1, Number(movingEntry.duration) || 1);
+  if (slotIndex < 0 || (slotIndex + duration) > TIMETABLE_SLOTS.length) return false;
+  for (let i = 0; i < duration; i++) {
+    if (slotIndex + i === Number(lunchSlotIndex)) return false;
+  }
+  return !(entries || []).some((entry) => {
+    if (ignoreBlockId && entry.blockId === ignoreBlockId) return false;
+    return overlaps(entry, day, slotIndex, duration);
+  });
+};
+const findTeacherConflictAcrossTimetables = ({
+  allTimetables,
+  teacherName,
+  day,
+  slotIndex,
+  duration,
+  excludeTimetableId
+}) => {
+  const teacher = normalize(teacherName);
+  if (!teacher) return null;
+  for (const tt of (allTimetables || [])) {
+    if (excludeTimetableId && String(tt?.id) === String(excludeTimetableId)) continue;
+    for (const entry of (tt?.entries || [])) {
+      if (normalize(entry?.teacherName) !== teacher) continue;
+      if (!overlaps(entry, day, slotIndex, duration)) continue;
+      return {
+        timetableId: tt.id,
+        department: tt.department,
+        collegeYear: tt.collegeYear,
+        semester: tt.semester,
+        division: tt.division,
+        subjectName: entry.subjectName,
+        slotIndex: Number(entry.slotIndex) || 0,
+        duration: Math.max(1, Number(entry.duration) || 1)
+      };
+    }
+  }
+  return null;
+};
+const buildGrid = (entries = []) => {
+  const grid = {};
+  entries.forEach((entry) => {
+    const duration = Math.max(1, Number(entry.duration) || 1);
+    for (let i = 0; i < duration; i++) {
+      grid[slotKey(entry.day, Number(entry.slotIndex) + i)] = {
+        ...entry,
+        isHead: i === 0,
+        isContinuation: i > 0
+      };
+    }
+  });
+  return grid;
+};
+const normalize = (text) => String(text || '').trim().toLowerCase();
+const durationFromType = (type) => (type === 'LAB' ? 2 : 1);
+const lectureKey = (subjectName, type, teacherName = '') => `${normalize(subjectName)}|${normalize(type)}|${normalize(teacherName)}`;
+const colorFromIndex = (index, total) => {
+  const safeTotal = Math.max(1, Number(total) || 1);
+  const hue = Math.round((index * 360) / safeTotal) % 360;
+  return `hsl(${hue}, 78%, 84%)`;
+};
+const colorForLecture = (subjectName, type, teacherName = '') => {
+  const key = lectureKey(subjectName, type, teacherName);
+  let hash = 0;
+  for (let i = 0; i < key.length; i++) hash = ((hash << 5) - hash + key.charCodeAt(i)) | 0;
+  const hue = Math.abs(hash) % 360;
+  return `hsl(${hue}, 74%, 84%)`;
+};
+const makeRng = (seed) => {
+  let t = seed >>> 0;
+  return () => {
+    t += 0x6D2B79F5;
+    let r = Math.imul(t ^ (t >>> 15), 1 | t);
+    r ^= r + Math.imul(r ^ (r >>> 7), 61 | r);
+    return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
+  };
+};
+const shuffleWith = (arr, rand) => {
+  const next = [...arr];
+  for (let i = next.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    [next[i], next[j]] = [next[j], next[i]];
+  }
+  return next;
+};
+const dayGapCount = (entries, day, lunchSlotIndex) => {
+  const slots = (entries || [])
+    .filter((entry) => entry.day === day)
+    .flatMap((entry) => {
+      const start = Number(entry.slotIndex) || 0;
+      const duration = Math.max(1, Number(entry.duration) || 1);
+      return Array.from({ length: duration }, (_, i) => start + i);
+    })
+    .filter((slot) => slot !== Number(lunchSlotIndex));
+  if (slots.length <= 1) return 0;
+  const uniq = Array.from(new Set(slots)).sort((a, b) => a - b);
+  return uniq[uniq.length - 1] - uniq[0] + 1 - uniq.length;
+};
+const isContiguousDay = (entries, day, lunchSlotIndex) => dayGapCount(entries, day, lunchSlotIndex) === 0;
+const autoGenerateEntries = (
+  constraints,
+  lunchSlotIndex,
+  allTimetables = [],
+  excludeTimetableId = '',
+  options = {}
+) => {
+  const requestedBlocks = (constraints || []).reduce((sum, c) => sum + Math.max(1, Number(c.frequencyPerWeek) || 1), 0);
+  const attemptCount = Math.max(1, Number(options.attempts) || 10);
+  const baseSeed = Number(options.seed) || Date.now() + Math.floor(Math.random() * 100000);
+  const dayCount = TIMETABLE_DAYS.length;
+  const fixedEntries = (options.fixedEntries || []).map((entry) => ({
+    ...entry,
+    duration: Math.max(1, Number(entry.duration) || durationFromType(entry.type)),
+    color: entry.color || colorForLecture(entry.subjectName, entry.type, entry.teacherName)
+  }));
+  const lectureKeys = [...new Set((constraints || []).map((c) => lectureKey(c.subjectName, c.type, c.teacherName)))];
+  const colorByLecture = new Map(lectureKeys.map((key, index) => [key, colorFromIndex(index, lectureKeys.length)]));
+
+  const sortedConstraints = [...(constraints || [])].sort((a, b) => {
+    const af = Math.max(1, Number(a.frequencyPerWeek) || 1);
+    const bf = Math.max(1, Number(b.frequencyPerWeek) || 1);
+    const ad = Math.max(1, Number(a.duration) || durationFromType(a.type));
+    const bd = Math.max(1, Number(b.duration) || durationFromType(b.type));
+    if (bf !== af) return bf - af;
+    if (bd !== ad) return bd - ad;
+    return lectureKey(a.subjectName, a.type, a.teacherName).localeCompare(lectureKey(b.subjectName, b.type, b.teacherName));
+  });
+
+  let bestEntries = [];
+  for (let attempt = 0; attempt < attemptCount; attempt++) {
+    const rand = makeRng(baseSeed + attempt * 9973);
+    const entries = [...fixedEntries];
+    const dayLoad = Object.fromEntries(TIMETABLE_DAYS.map((day) => [day, 0]));
+    fixedEntries.forEach((entry) => {
+      const day = entry.day;
+      if (!day) return;
+      dayLoad[day] = (dayLoad[day] || 0) + Math.max(1, Number(entry.duration) || 1);
+    });
+    const fixedDayContiguous = Object.fromEntries(
+      TIMETABLE_DAYS.map((day) => [day, isContiguousDay(fixedEntries, day, lunchSlotIndex)])
+    );
+    const perLectureDayCount = new Map();
+
+    const randomizedConstraints = shuffleWith(sortedConstraints, rand);
+
+    randomizedConstraints.forEach((constraint) => {
+      const freq = Math.max(1, Number(constraint.frequencyPerWeek) || 1);
+      const duration = Math.max(1, Number(constraint.duration) || durationFromType(constraint.type));
+      const key = lectureKey(constraint.subjectName, constraint.type, constraint.teacherName);
+      if (!perLectureDayCount.has(key)) {
+        perLectureDayCount.set(key, Object.fromEntries(TIMETABLE_DAYS.map((day) => [day, 0])));
+      }
+      const lectureDayLoad = perLectureDayCount.get(key);
+
+      for (let i = 0; i < freq; i++) {
+        let placed = false;
+        const pivot = (i + Math.floor(rand() * dayCount)) % dayCount;
+        const candidateDays = [...TIMETABLE_DAYS].sort((a, b) => {
+          const ad = lectureDayLoad[a] || 0;
+          const bd = lectureDayLoad[b] || 0;
+          if (ad !== bd) return ad - bd;
+          const al = dayLoad[a] || 0;
+          const bl = dayLoad[b] || 0;
+          if (al !== bl) return al - bl;
+          const ai = (dayIndex(a) - pivot + dayCount) % dayCount;
+          const bi = (dayIndex(b) - pivot + dayCount) % dayCount;
+          if (ai !== bi) return ai - bi;
+          return rand() < 0.5 ? -1 : 1;
+        });
+
+        for (const day of candidateDays) {
+          const slotOrder = shuffleWith(TIMETABLE_SLOTS.map((_, idx) => idx), rand)
+            .map((slot) => {
+              const candidate = {
+                blockId: `tmp_${constraint.id}_${i}_${day}_${slot}_${attempt}`,
+                subjectName: constraint.subjectName,
+                teacherName: constraint.teacherName,
+                type: constraint.type || 'SUBJECT',
+                duration,
+                day,
+                slotIndex: slot
+              };
+              const nextEntries = [...entries, candidate];
+              const gaps = dayGapCount(nextEntries, day, lunchSlotIndex);
+              const contiguousOk = fixedDayContiguous[day] ? gaps === 0 : true;
+              return { slot, gaps, contiguousOk };
+            })
+            .sort((a, b) => {
+              if (a.contiguousOk !== b.contiguousOk) return a.contiguousOk ? -1 : 1;
+              if (a.gaps !== b.gaps) return a.gaps - b.gaps;
+              return rand() < 0.5 ? -1 : 1;
+            })
+            .map((item) => item.slot);
+          for (const slot of slotOrder) {
+            const block = {
+              blockId: `tb${Date.now()}_${constraint.id}_${i}_${day}_${slot}_${attempt}`,
+              subjectName: constraint.subjectName,
+              teacherName: constraint.teacherName,
+              type: constraint.type || 'SUBJECT',
+              duration,
+              color: colorByLecture.get(key) || colorForLecture(constraint.subjectName, constraint.type, constraint.teacherName),
+              day,
+              slotIndex: slot
+            };
+            if (!canPlaceEntry(entries, block, day, slot, lunchSlotIndex)) continue;
+            if (findTeacherConflictAcrossTimetables({
+              allTimetables,
+              teacherName: block.teacherName,
+              day,
+              slotIndex: slot,
+              duration,
+              excludeTimetableId
+            })) continue;
+            entries.push(block);
+            dayLoad[day] = (dayLoad[day] || 0) + duration;
+            lectureDayLoad[day] = (lectureDayLoad[day] || 0) + 1;
+            placed = true;
+            break;
+          }
+          if (placed) break;
+        }
+      }
+    });
+
+    if (entries.length > bestEntries.length) {
+      bestEntries = entries;
+      if (bestEntries.length >= requestedBlocks) break;
+    }
+  }
+
+  return bestEntries;
+};
+
+export const TimetableManager = ({ user }) => {
+  const [mode, setMode] = useState('CREATE');
+  const [allTimetables, setAllTimetables] = useState([]);
+  const [selectedClass, setSelectedClass] = useState({
+    department: user.department || DEPARTMENTS[0],
+    collegeYear: '1',
+    semester: '1',
+    division: user.division || DIVISIONS[0]
+  });
+  const [newConstraint, setNewConstraint] = useState({
+    subjectName: '',
+    teacherName: user.fullName || '',
+    type: 'SUBJECT',
+    frequencyPerWeek: '3'
+  });
+  const [constraints, setConstraints] = useState([]);
+  const [lunchSlotIndex, setLunchSlotIndex] = useState('3');
+  const [mineDraft, setMineDraft] = useState(null);
+  const [dragItem, setDragItem] = useState(null);
+  const [dragHover, setDragHover] = useState('');
+  const [addedTemplate, setAddedTemplate] = useState({
+    subjectName: '',
+    teacherName: user.fullName || '',
+    type: 'SUBJECT',
+    frequencyPerWeek: '1'
+  });
+  const semesterOptions = useMemo(
+    () => getSemestersForYear(selectedClass.collegeYear).map((v) => ({ value: v, label: v })),
+    [selectedClass.collegeYear]
+  );
+
+  const selectedKey = timetableKey(selectedClass);
+  const selectedTimetable = useMemo(
+    () => (allTimetables || []).find((tt) => timetableKey(tt) === selectedKey),
+    [allTimetables, selectedKey]
+  );
+
+  const updateCachedRows = (rows) => {
+    localStorage.setItem(
+      teacherTimetablesCacheKey(user.id),
+      JSON.stringify({ rows: rows || [], fetchedAt: new Date().toISOString() })
+    );
+  };
+
+  const replaceTimetableInStore = (updated) => {
+    setAllTimetables((prev) => {
+      const exists = prev.some((tt) => tt.id === updated.id);
+      const next = exists ? prev.map((tt) => (tt.id === updated.id ? updated : tt)) : [...prev, updated];
+      updateCachedRows(next);
+      return next;
+    });
+  };
+  const removeTimetableFromStore = (id) => {
+    setAllTimetables((prev) => {
+      const next = (prev || []).filter((tt) => tt.id !== id);
+      updateCachedRows(next);
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    try {
+      const cached = JSON.parse(localStorage.getItem(teacherTimetablesCacheKey(user.id)) || '{}');
+      if (Array.isArray(cached.rows)) setAllTimetables(cached.rows);
+    } catch (_) {}
+
+    const load = async () => {
+      const rows = await ApiService.getTimetables();
+      const next = rows || [];
+      setAllTimetables(next);
+      updateCachedRows(next);
+    };
+    load();
+  }, [user.id]);
+
+  useEffect(() => {
+    if (!selectedTimetable) {
+      setMineDraft(null);
+      return;
+    }
+    setMineDraft({
+      ...selectedTimetable,
+      entries: cloneEntries(selectedTimetable.entries),
+      deletedEntries: cloneEntries(selectedTimetable.deletedEntries),
+      addedEntries: cloneEntries(selectedTimetable.addedEntries).map((entry) => ({
+        ...entry,
+        duration: Math.max(1, Number(entry.duration) || durationFromType(entry.type)),
+        color: entry.color || colorForLecture(entry.subjectName, entry.type, entry.teacherName),
+        frequencyPerWeek: Math.max(0, Number(entry.frequencyPerWeek) || 0)
+      }))
+    });
+  }, [selectedTimetable?.id, selectedTimetable?.updatedAt]);
+
+  useEffect(() => {
+    const valid = getSemestersForYear(selectedClass.collegeYear);
+    if (!valid.includes(String(selectedClass.semester))) {
+      setSelectedClass((prev) => ({ ...prev, semester: valid[0] || '' }));
+    }
+  }, [selectedClass.collegeYear]);
+
+  const mineGrid = useMemo(() => buildGrid(mineDraft?.entries || []), [mineDraft?.entries]);
+
+  const mySchedule = useMemo(() => {
+    const myName = normalize(user.fullName);
+    const rows = [];
+    (allTimetables || []).forEach((tt) => {
+      (tt.entries || []).forEach((entry) => {
+        if (normalize(entry.teacherName) !== myName) return;
+        rows.push({
+          id: `${tt.id}_${entry.blockId}`,
+          department: tt.department,
+          collegeYear: tt.collegeYear,
+          semester: tt.semester,
+          division: tt.division,
+          day: entry.day,
+          slotIndex: Number(entry.slotIndex),
+          duration: Math.max(1, Number(entry.duration) || 1),
+          subjectName: entry.subjectName,
+          type: entry.type
+        });
+      });
+    });
+    return rows.sort((a, b) => {
+      const dayDiff = dayIndex(a.day) - dayIndex(b.day);
+      if (dayDiff !== 0) return dayDiff;
+      return a.slotIndex - b.slotIndex;
+    });
+  }, [allTimetables, user.fullName]);
+  const myScheduleGrid = useMemo(
+    () => buildGrid((mySchedule || []).map((row) => ({
+      blockId: row.id,
+      subjectName: row.subjectName,
+      teacherName: user.fullName,
+      type: row.type,
+      duration: row.duration,
+      color: colorForLecture(row.subjectName, row.type, user.fullName),
+      day: row.day,
+      slotIndex: row.slotIndex
+    }))),
+    [mySchedule, user.fullName]
+  );
+
+  const addConstraint = () => {
+    if (!newConstraint.subjectName.trim() || !newConstraint.teacherName.trim()) return;
+    const next = {
+      id: `tc${Date.now()}`,
+      subjectName: newConstraint.subjectName.trim(),
+      teacherName: newConstraint.teacherName.trim(),
+      type: newConstraint.type,
+      frequencyPerWeek: Math.max(1, Number(newConstraint.frequencyPerWeek) || 1),
+      duration: durationFromType(newConstraint.type),
+      color: colorForLecture(newConstraint.subjectName.trim(), newConstraint.type, newConstraint.teacherName.trim())
+    };
+    setConstraints((prev) => [...prev, next]);
+    setNewConstraint((prev) => ({ ...prev, subjectName: '' }));
+  };
+
+  const createTimetable = async () => {
+    if (selectedTimetable) {
+      alert('Timetable already exists for this class. Open "Your Timetable" to edit it.');
+      setMode('MINE');
+      return;
+    }
+    if (constraints.length === 0) {
+      alert('Add at least one subject constraint before creating timetable.');
+      return;
+    }
+    const latestTimetables = await ApiService.getTimetables({ force: true });
+    const timetableUniverse = latestTimetables || [];
+    setAllTimetables(timetableUniverse);
+    updateCachedRows(timetableUniverse);
+    const generatedEntries = autoGenerateEntries(
+      constraints,
+      Number(lunchSlotIndex),
+      timetableUniverse,
+      '',
+      { attempts: 20 }
+    );
+    const requestedBlocks = (constraints || []).reduce((sum, c) => sum + Math.max(1, Number(c.frequencyPerWeek) || 1), 0);
+    if (generatedEntries.length < requestedBlocks) {
+      alert('Some lectures could not be auto-placed due to teacher time conflicts or slot limits.');
+    }
+    const now = new Date().toISOString();
+    const payload = {
+      id: `tt${Date.now()}`,
+      createdBy: user.id,
+      createdByName: user.fullName,
+      department: selectedClass.department,
+      collegeYear: Number(selectedClass.collegeYear),
+      semester: Number(selectedClass.semester),
+      division: selectedClass.division,
+      lunchSlotIndex: Number(lunchSlotIndex),
+      constraints: constraints.map((c) => ({
+        id: c.id,
+        subjectName: c.subjectName,
+        teacherName: c.teacherName,
+        type: c.type,
+        frequencyPerWeek: c.frequencyPerWeek
+      })),
+      entries: generatedEntries,
+      deletedEntries: [],
+      addedEntries: constraints.map((c) => ({
+        blockId: `pool_${c.id}`,
+        subjectName: c.subjectName,
+        teacherName: c.teacherName,
+        type: c.type,
+        frequencyPerWeek: c.frequencyPerWeek,
+        duration: c.duration,
+        color: c.color
+      })),
+      createdAt: now,
+      updatedAt: now
+    };
+    try {
+      const created = await ApiService.addTimetable(payload);
+      replaceTimetableInStore(created || payload);
+      setMode('MINE');
+    } catch (err) {
+      const detail = err?.data?.conflicts?.[0];
+      if (detail) {
+        const c = detail.conflictWith || {};
+        alert(
+          `Teacher conflict: ${detail.teacherName} already has a lecture on ${detail.day} at slot ${Number(c.slotIndex) + 1} (Div ${c.division || '-'}, Y${c.collegeYear || '-'} S${c.semester || '-'}).`
+        );
+        return;
+      }
+      alert(err?.data?.error || err?.message || 'Unable to create timetable.');
+    }
+  };
+
+  const onDropToCell = (day, slotIndex) => {
+    if (!mineDraft || !dragItem) return;
+    const lunch = Number(mineDraft.lunchSlotIndex);
+    const conflictMessage = (teacherName, conflict) => (
+      `Cannot place this lecture. ${teacherName} already has ${conflict.subjectName || 'a lecture'} on ${day} at slot ${conflict.slotIndex + 1} in ${conflict.department || '-'} Div ${conflict.division || '-'} (Y${conflict.collegeYear || '-'} S${conflict.semester || '-'}).`
+    );
+    if (slotIndex === lunch) {
+      setDragHover('');
+      return;
+    }
+    if (dragItem.kind === 'existing') {
+      const moving = dragItem.entry;
+      const extConflict = findTeacherConflictAcrossTimetables({
+        allTimetables,
+        teacherName: moving.teacherName,
+        day,
+        slotIndex,
+        duration: moving.duration,
+        excludeTimetableId: mineDraft.id
+      });
+      if (extConflict) {
+        alert(conflictMessage(moving.teacherName, extConflict));
+        setDragHover('');
+        return;
+      }
+      if (!canPlaceEntry(mineDraft.entries, moving, day, slotIndex, lunch, moving.blockId)) return;
+      setMineDraft((prev) => ({
+        ...prev,
+        entries: (prev.entries || []).map((entry) => (
+          entry.blockId === moving.blockId ? { ...entry, day, slotIndex } : entry
+        ))
+      }));
+    } else if (dragItem.kind === 'deleted') {
+      const source = dragItem.entry;
+      const restored = { ...source, blockId: `tb${Date.now()}`, day, slotIndex };
+      const extConflict = findTeacherConflictAcrossTimetables({
+        allTimetables,
+        teacherName: restored.teacherName,
+        day,
+        slotIndex,
+        duration: restored.duration,
+        excludeTimetableId: mineDraft.id
+      });
+      if (extConflict) {
+        alert(conflictMessage(restored.teacherName, extConflict));
+        setDragHover('');
+        return;
+      }
+      if (!canPlaceEntry(mineDraft.entries, restored, day, slotIndex, lunch)) return;
+      setMineDraft((prev) => ({
+        ...prev,
+        entries: [...(prev.entries || []), restored],
+        deletedEntries: (prev.deletedEntries || []).filter((entry) => entry.blockId !== source.blockId)
+      }));
+    } else if (dragItem.kind === 'added') {
+      const template = dragItem.entry;
+      const remaining = Math.max(0, Number(template.frequencyPerWeek) || 0);
+      if (remaining <= 0) return;
+      const created = {
+        blockId: `tb${Date.now()}`,
+        subjectName: template.subjectName,
+        teacherName: template.teacherName,
+        type: template.type || 'SUBJECT',
+        duration: durationFromType(template.type),
+        color: template.color || colorForLecture(template.subjectName, template.type, template.teacherName),
+        day,
+        slotIndex
+      };
+      const extConflict = findTeacherConflictAcrossTimetables({
+        allTimetables,
+        teacherName: created.teacherName,
+        day,
+        slotIndex,
+        duration: created.duration,
+        excludeTimetableId: mineDraft.id
+      });
+      if (extConflict) {
+        alert(conflictMessage(created.teacherName, extConflict));
+        setDragHover('');
+        return;
+      }
+      if (!canPlaceEntry(mineDraft.entries, created, day, slotIndex, lunch)) return;
+      setMineDraft((prev) => ({
+        ...prev,
+        entries: [...(prev.entries || []), created],
+        addedEntries: (prev.addedEntries || [])
+          .map((entry) => (
+            entry.blockId === template.blockId
+              ? { ...entry, frequencyPerWeek: Math.max(0, Number(entry.frequencyPerWeek) - 1) }
+              : entry
+          ))
+          .filter((entry) => Number(entry.frequencyPerWeek) > 0)
+      }));
+    }
+    setDragHover('');
+  };
+
+  const deleteBlock = (blockId) => {
+    setMineDraft((prev) => {
+      const target = (prev.entries || []).find((entry) => entry.blockId === blockId);
+      if (!target) return prev;
+      const { day, slotIndex, ...rest } = target;
+      return {
+        ...prev,
+        entries: (prev.entries || []).filter((entry) => entry.blockId !== blockId),
+        deletedEntries: [...(prev.deletedEntries || []), rest]
+      };
+    });
+  };
+
+  const addTemplate = () => {
+    if (!addedTemplate.subjectName.trim() || !addedTemplate.teacherName.trim()) return;
+    const next = {
+      blockId: `extra_${Date.now()}`,
+      subjectName: addedTemplate.subjectName.trim(),
+      teacherName: addedTemplate.teacherName.trim(),
+      type: addedTemplate.type,
+      frequencyPerWeek: Math.max(1, Number(addedTemplate.frequencyPerWeek) || 1),
+      duration: durationFromType(addedTemplate.type),
+      color: colorForLecture(addedTemplate.subjectName.trim(), addedTemplate.type, addedTemplate.teacherName.trim())
+    };
+    setMineDraft((prev) => ({ ...prev, addedEntries: [...(prev?.addedEntries || []), next] }));
+    setAddedTemplate((prev) => ({ ...prev, subjectName: '' }));
+  };
+  const deleteAddedTemplate = (blockId) => {
+    setMineDraft((prev) => ({
+      ...prev,
+      addedEntries: (prev?.addedEntries || []).filter((entry) => entry.blockId !== blockId)
+    }));
+  };
+
+  const saveMine = async () => {
+    if (!mineDraft) return;
+    const payload = { ...mineDraft, updatedAt: new Date().toISOString() };
+    try {
+      const updated = await ApiService.updateTimetable(mineDraft.id, payload);
+      replaceTimetableInStore(updated || payload);
+      alert('Timetable saved.');
+    } catch (err) {
+      const detail = err?.data?.conflicts?.[0];
+      if (detail) {
+        const c = detail.conflictWith || {};
+        alert(
+          `Teacher conflict: ${detail.teacherName} already has a lecture on ${detail.day} at slot ${Number(c.slotIndex) + 1} (Div ${c.division || '-'}, Y${c.collegeYear || '-'} S${c.semester || '-'}).`
+        );
+        return;
+      }
+      alert(err?.data?.error || err?.message || 'Unable to save timetable.');
+    }
+  };
+
+  const deleteSelectedTimetable = async () => {
+    const targetId = mineDraft?.id || selectedTimetable?.id;
+    if (!targetId) return;
+    if (!window.confirm('Delete timetable for the selected class?')) return;
+    try {
+      await ApiService.deleteTimetable(targetId);
+      removeTimetableFromStore(targetId);
+      setMineDraft(null);
+      alert('Timetable deleted.');
+    } catch (err) {
+      alert(err?.data?.error || err?.message || 'Unable to delete timetable.');
+    }
+  };
+
+  const regenerateMine = async () => {
+    if (!mineDraft) return;
+    const latestTimetables = await ApiService.getTimetables({ force: true });
+    const timetableUniverse = latestTimetables || [];
+    setAllTimetables(timetableUniverse);
+    updateCachedRows(timetableUniverse);
+    const poolConstraints = (mineDraft.addedEntries || []).map((entry) => ({
+      id: entry.id || entry.blockId || `pool_${Date.now()}`,
+      subjectName: entry.subjectName,
+      teacherName: entry.teacherName,
+      type: entry.type || 'SUBJECT',
+      frequencyPerWeek: Math.max(1, Number(entry.frequencyPerWeek) || 1),
+      duration: Math.max(1, Number(entry.duration) || durationFromType(entry.type)),
+      color: entry.color || colorForLecture(entry.subjectName, entry.type, entry.teacherName)
+    }));
+    const combinedConstraints = [...(mineDraft.constraints || []), ...poolConstraints];
+    const constraintKeys = new Set(
+      combinedConstraints.map((c) => lectureKey(c.subjectName, c.type, c.teacherName))
+    );
+    const fixedEntries = (mineDraft.entries || []).filter(
+      (entry) => !constraintKeys.has(lectureKey(entry.subjectName, entry.type, entry.teacherName))
+    );
+    const nextEntries = autoGenerateEntries(
+      combinedConstraints,
+      Number(mineDraft.lunchSlotIndex),
+      timetableUniverse,
+      mineDraft.id,
+      { attempts: 20, fixedEntries }
+    );
+    const requestedBlocks = combinedConstraints.reduce((sum, c) => sum + Math.max(1, Number(c.frequencyPerWeek) || 1), 0);
+    if ((nextEntries.length - fixedEntries.length) < requestedBlocks) {
+      alert('Some lectures could not be auto-placed due to teacher time conflicts or slot limits.');
+    }
+    setMineDraft((prev) => ({ ...prev, entries: nextEntries, deletedEntries: [] }));
+  };
+
+  const permanentlyDeleteRemoved = (blockId) => {
+    setMineDraft((prev) => ({
+      ...prev,
+      deletedEntries: (prev.deletedEntries || []).filter((entry) => entry.blockId !== blockId)
+    }));
+  };
+
+  const classSelectors = (
+    <div className="grid grid-cols-1 md:grid-cols-4 gap-2 mb-4 timetable-create-form">
+      <Select label="Department" options={DEPARTMENTS.map((d) => ({ value: d, label: d }))} value={selectedClass.department} onChange={(e) => setSelectedClass((prev) => ({ ...prev, department: e.target.value }))} />
+      <Select label="Year" options={YEARS.map((v) => ({ value: v, label: v }))} value={selectedClass.collegeYear} onChange={(e) => setSelectedClass((prev) => ({ ...prev, collegeYear: e.target.value }))} />
+      <Select label="Semester" options={semesterOptions} value={selectedClass.semester} onChange={(e) => setSelectedClass((prev) => ({ ...prev, semester: e.target.value }))} />
+      <Select label="Division" options={DIVISIONS.map((d) => ({ value: d, label: d }))} value={selectedClass.division} onChange={(e) => setSelectedClass((prev) => ({ ...prev, division: e.target.value }))} />
+    </div>
+  );
+
+  return (
+    <Card title="Timetable Manager">
+      <div className="flex border-b mb-4 overflow-x-auto">
+        {[
+          { id: 'CREATE', label: 'Create Timetable' },
+          { id: 'MINE', label: 'Your Timetable' },
+          { id: 'MYSCHEDULE', label: 'My Schedule' }
+        ].map((tab) => (
+          <button
+            key={tab.id}
+            onClick={() => setMode(tab.id)}
+            className={`flex-1 py-2 px-4 text-sm font-semibold ${mode === tab.id ? 'text-indigo-600 border-b-2 border-indigo-600' : 'text-gray-600'}`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {mode === 'CREATE' && (
+        <div className="space-y-4">
+          {classSelectors}
+          <div className="max-w-xs">
+            <Select
+              label="Lunch Break Slot"
+              options={TIMETABLE_SLOTS.map((s, i) => ({ value: String(i), label: `${i + 1}. ${s}` }))}
+              value={lunchSlotIndex}
+              onChange={(e) => setLunchSlotIndex(e.target.value)}
+            />
+          </div>
+          {selectedTimetable && (
+            <div className="p-3 rounded bg-yellow-50 border border-yellow-200 text-yellow-900 text-sm">
+              A timetable already exists for this class. Use "Your Timetable" to edit.
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-2 timetable-create-form">
+            <Input label="Subject Name" value={newConstraint.subjectName} onChange={(e) => setNewConstraint((prev) => ({ ...prev, subjectName: e.target.value }))} />
+            <Input label="Teacher Name" value={newConstraint.teacherName} onChange={(e) => setNewConstraint((prev) => ({ ...prev, teacherName: e.target.value }))} />
+            <Select label="Type" options={[{ value: 'SUBJECT', label: 'SUBJECT' }, { value: 'LAB', label: 'LAB' }]} value={newConstraint.type} onChange={(e) => setNewConstraint((prev) => ({ ...prev, type: e.target.value }))} />
+            <Input type="number" min="1" max="10" label="Freq / Week" value={newConstraint.frequencyPerWeek} onChange={(e) => setNewConstraint((prev) => ({ ...prev, frequencyPerWeek: e.target.value }))} />
+          </div>
+          <div className="timetable-create-action">
+            <Button variant="secondary" className="text-black" onClick={addConstraint}>Add Subject Constraint</Button>
+          </div>
+
+          <div className="space-y-2">
+            {constraints.map((c) => (
+              <div key={c.id} className="p-3 border rounded bg-white text-black flex items-center justify-between">
+                <div>
+                  <div className="font-semibold">{c.subjectName}</div>
+                  <div className="text-xs text-gray-600">{c.teacherName} | {c.type} | {c.frequencyPerWeek}/week | {c.type === 'LAB' ? '2hr' : '1hr'}</div>
+                </div>
+                <button className="text-red-600" onClick={() => setConstraints((prev) => prev.filter((x) => x.id !== c.id))}><Trash2 size={14} /></button>
+              </div>
+            ))}
+            {constraints.length === 0 && <div className="text-sm text-gray-500">No constraints added yet.</div>}
+          </div>
+
+          <Button onClick={createTimetable} disabled={!!selectedTimetable}>Create + Auto Generate Timetable</Button>
+        </div>
+      )}
+
+      {mode === 'MINE' && (
+        <div className="space-y-4">
+          {classSelectors}
+          {!mineDraft ? (
+            <div className="text-sm text-gray-500">No timetable found for selected class.</div>
+          ) : (
+            <>
+              <div className="flex gap-2">
+                <Button variant="secondary" className="text-black" onClick={regenerateMine}>Regenerate Timetable</Button>
+                <Button variant="danger" onClick={deleteSelectedTimetable}>Delete Selected Timetable</Button>
+              </div>
+              <div className="text-sm text-gray-700 font-semibold">
+                Timetable of: {mineDraft.department} | Y{mineDraft.collegeYear} S{mineDraft.semester} | Div {mineDraft.division}
+              </div>
+              <div className="table-wrapper timetable-table-wrap">
+                <table className="w-full timetable-table">
+                  <thead>
+                    <tr>
+                      <th>Time</th>
+                      {TIMETABLE_DAYS.map((day) => <th key={day}>{day}</th>)}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {TIMETABLE_SLOTS.map((slot, slotIndex) => (
+                      <tr key={slot}>
+                        <td className="time-col">{slot}</td>
+                        {TIMETABLE_DAYS.map((day) => {
+                          const key = slotKey(day, slotIndex);
+                          const cell = mineGrid[key];
+                          const isLunch = slotIndex === Number(mineDraft.lunchSlotIndex);
+                          return (
+                            <td
+                              key={`${day}_${slotIndex}`}
+                              className={`timetable-cell ${dragHover === key ? 'drag-hover' : ''} ${isLunch ? 'tt-lunch-cell' : ''}`}
+                              onDragOver={(e) => {
+                                if (isLunch) return;
+                                if (!dragItem) {
+                                  e.preventDefault();
+                                  setDragHover(key);
+                                  return;
+                                }
+                                const source = dragItem.entry || {};
+                                const duration = dragItem.kind === 'added'
+                                  ? durationFromType(source.type)
+                                  : Math.max(1, Number(source.duration) || 1);
+                                const extConflict = findTeacherConflictAcrossTimetables({
+                                  allTimetables,
+                                  teacherName: source.teacherName,
+                                  day,
+                                  slotIndex,
+                                  duration,
+                                  excludeTimetableId: mineDraft.id
+                                });
+                                if (extConflict) {
+                                  setDragHover('');
+                                  return;
+                                }
+                                e.preventDefault();
+                                setDragHover(key);
+                              }}
+                              onDragLeave={() => setDragHover('')}
+                              onDrop={(e) => {
+                                e.preventDefault();
+                                onDropToCell(day, slotIndex);
+                              }}
+                            >
+                              {isLunch ? (
+                                <div className="tt-lunch-label">Lunch Break</div>
+                              ) : cell && cell.isHead ? (
+                                <div
+                                  className="tt-block tt-draggable"
+                                  style={{ backgroundColor: cell.color || '#dbeafe' }}
+                                  draggable
+                                  onDragStart={() => setDragItem({ kind: 'existing', entry: cell })}
+                                  onDragEnd={() => { setDragItem(null); setDragHover(''); }}
+                                >
+                                  <button className="tt-delete-btn" onClick={() => deleteBlock(cell.blockId)}>x</button>
+                                  <div className="tt-title">{cell.subjectName}</div>
+                                  <div className="tt-meta">{cell.teacherName} | {cell.type}</div>
+                                </div>
+                              ) : cell ? (
+                                <div className="tt-block" style={{ backgroundColor: cell.color || '#dbeafe' }}>
+                                  <div className="tt-title">{cell.subjectName} (cont.)</div>
+                                  <div className="tt-meta">{cell.teacherName} | {cell.type}</div>
+                                </div>
+                              ) : (
+                                <span className="tt-empty">-</span>
+                              )}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <div>
+                  <div className="font-semibold text-black mb-2">Removed Blocks (Drag to restore)</div>
+                  <div className="space-y-2">
+                    {(mineDraft.deletedEntries || []).map((entry, i) => (
+                      <div
+                        key={`${entry.blockId}_${i}`}
+                        className="tt-deleted-card text-black"
+                        draggable
+                        onDragStart={() => setDragItem({ kind: 'deleted', entry })}
+                        onDragEnd={() => { setDragItem(null); setDragHover(''); }}
+                      >
+                        <div className="font-semibold flex items-center justify-between">
+                          <span>{entry.subjectName}</span>
+                          <button className="text-red-600 text-xs underline" onClick={() => permanentlyDeleteRemoved(entry.blockId)}>
+                            Delete
+                          </button>
+                        </div>
+                        <div className="text-xs text-gray-600">{entry.teacherName} | {entry.type} | {entry.duration || 1} slot(s)</div>
+                      </div>
+                    ))}
+                    {(mineDraft.deletedEntries || []).length === 0 && <div className="text-sm text-gray-500">No removed blocks.</div>}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="font-semibold text-black mb-2">Add Lecture (Drag to schedule)</div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2 tt-added-subject-col mb-2">
+                    <Input label="Subject" value={addedTemplate.subjectName} onChange={(e) => setAddedTemplate((prev) => ({ ...prev, subjectName: e.target.value }))} />
+                    <Input label="Teacher" value={addedTemplate.teacherName} onChange={(e) => setAddedTemplate((prev) => ({ ...prev, teacherName: e.target.value }))} />
+                    <Select label="Type" options={[{ value: 'SUBJECT', label: 'SUBJECT' }, { value: 'LAB', label: 'LAB' }]} value={addedTemplate.type} onChange={(e) => setAddedTemplate((prev) => ({ ...prev, type: e.target.value }))} />
+                    <Input type="number" min="1" max="10" label="Freq / Week" value={addedTemplate.frequencyPerWeek} onChange={(e) => setAddedTemplate((prev) => ({ ...prev, frequencyPerWeek: e.target.value }))} />
+                  </div>
+                  <Button variant="secondary" className="text-black mb-2" onClick={addTemplate}>Add</Button>
+                  <div className="space-y-2">
+                    {(mineDraft.addedEntries || []).map((entry, i) => (
+                      <div
+                        key={`${entry.blockId}_${i}`}
+                        className="tt-deleted-card text-black"
+                        draggable
+                        onDragStart={() => setDragItem({ kind: 'added', entry })}
+                        onDragEnd={() => { setDragItem(null); setDragHover(''); }}
+                      >
+                        <div className="font-semibold flex items-center justify-between gap-2">
+                          <span>{entry.subjectName}</span>
+                          <button className="text-red-600 text-xs underline" onClick={() => deleteAddedTemplate(entry.blockId)}>
+                            Delete
+                          </button>
+                        </div>
+                        <div className="text-xs text-gray-600">{entry.teacherName} | {entry.type} | remaining: {entry.frequencyPerWeek}</div>
+                      </div>
+                    ))}
+                    {(mineDraft.addedEntries || []).length === 0 && <div className="text-sm text-gray-500">No added templates.</div>}
+                  </div>
+                </div>
+              </div>
+
+              <Button onClick={saveMine}>Save Timetable</Button>
+            </>
+          )}
+        </div>
+      )}
+
+      {mode === 'MYSCHEDULE' && (
+        <div>
+          <div className="mb-3 text-sm text-black font-semibold">My lecture timetable</div>
+          <div className="table-wrapper timetable-table-wrap">
+            <table className="w-full timetable-table">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  {TIMETABLE_DAYS.map((day) => <th key={day}>{day}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {TIMETABLE_SLOTS.map((slot, slotIndex) => (
+                  <tr key={slot}>
+                    <td className="time-col">{slot}</td>
+                    {TIMETABLE_DAYS.map((day) => {
+                      const cell = myScheduleGrid[slotKey(day, slotIndex)];
+                      return (
+                        <td key={`${day}_${slotIndex}`} className="timetable-cell">
+                          {!cell ? (
+                            <span className="tt-empty">-</span>
+                          ) : (
+                            <div className="tt-block" style={{ backgroundColor: cell.color || '#dbeafe' }}>
+                              <div className="tt-title">{cell.subjectName}{cell.isContinuation ? ' (cont.)' : ''}</div>
+                              {!cell.isContinuation && (() => {
+                                const row = mySchedule.find((x) => x.id === cell.blockId);
+                                return (
+                                  <div className="tt-meta">
+                                    {row ? `${row.department} | Y${row.collegeYear} S${row.semester} Div ${row.division}` : cell.type}
+                                  </div>
+                                );
+                              })()}
+                            </div>
+                          )}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {mySchedule.length === 0 && (
+            <div className="text-sm text-gray-500 mt-3">No lectures mapped to your name yet.</div>
+          )}
+        </div>
       )}
     </Card>
   );
 };
 
-const QuizCreator = ({ user, quizzes, onCreated }) => {
-  const [quiz, setQuiz] = useState({ title: '', questions: [], timeLimit: 30, collegeYear: '', semester: '' });
-  const [currentQ, setCurrentQ] = useState({ text: '', opt1: '', opt2: '', opt3: '', opt4: '', correct: 0 });
-  const [selectedTemplateId, setSelectedTemplateId] = useState('');
-  const [editorQuiz, setEditorQuiz] = useState(null);
-  const [editingQuestionIndex, setEditingQuestionIndex] = useState(null);
-  const [editorQuestion, setEditorQuestion] = useState({ text: '', opt1: '', opt2: '', opt3: '', opt4: '', correct: '0' });
-
-  useEffect(() => {
-    if (!selectedTemplateId) {
-      setEditorQuiz(null);
-      return;
-    }
-    const selected = quizzes.find(q => q.id === selectedTemplateId);
-    if (!selected) {
-      setSelectedTemplateId('');
-      setEditorQuiz(null);
-      return;
-    }
-    setEditorQuiz(JSON.parse(JSON.stringify(selected)));
-    setEditingQuestionIndex(null);
-    setEditorQuestion({ text: '', opt1: '', opt2: '', opt3: '', opt4: '', correct: '0' });
-  }, [selectedTemplateId, quizzes]);
-
-  const addQuestion = () => {
-    if (!currentQ.text || !currentQ.opt1) return;
-    const newQ = {
-      id: `q${Date.now()}`,
-      text: currentQ.text,
-      options: [currentQ.opt1, currentQ.opt2, currentQ.opt3, currentQ.opt4],
-      correctOption: currentQ.correct
-    };
-    setQuiz({ ...quiz, questions: [...(quiz.questions || []), newQ] });
-    setCurrentQ({ text: '', opt1: '', opt2: '', opt3: '', opt4: '', correct: 0 });
-  };
-
-  const saveQuiz = async () => {
-    if (!quiz.title || (quiz.questions?.length || 0) === 0) return alert("Title and questions required.");
-    if (!quiz.collegeYear || !quiz.semester) return alert("Year and Semester required.");
-    
-    await ApiService.addQuiz({
-      id: `qz${Date.now()}`,
-      title: quiz.title,
-      createdBy: user.id,
-      questions: quiz.questions,
-      timeLimit: parseInt(quiz.timeLimit),
-      collegeYear: parseInt(quiz.collegeYear),
-      semester: parseInt(quiz.semester)
-    });
-    alert('Quiz created!');
-    setQuiz({ title: '', questions: [], timeLimit: 30, collegeYear: '', semester: '' });
-    onCreated();
-  };
-
-  const deleteQuiz = async (id) => {
-    if(!window.confirm("Delete this quiz template?")) return;
-    await ApiService.deleteQuiz(id);
-    if (selectedTemplateId === id) {
-      setSelectedTemplateId('');
-      setEditorQuiz(null);
-    }
-    onCreated();
-  };
-
-  const loadQuestionIntoEditor = (idx) => {
-    if (!editorQuiz?.questions?.[idx]) return;
-    const q = editorQuiz.questions[idx];
-    setEditingQuestionIndex(idx);
-    setEditorQuestion({
-      text: q.text || '',
-      opt1: q.options?.[0] || '',
-      opt2: q.options?.[1] || '',
-      opt3: q.options?.[2] || '',
-      opt4: q.options?.[3] || '',
-      correct: String(q.correctOption ?? 0)
-    });
-  };
-
-  const resetEditorQuestionDraft = () => {
-    setEditingQuestionIndex(null);
-    setEditorQuestion({ text: '', opt1: '', opt2: '', opt3: '', opt4: '', correct: '0' });
-  };
-
-  const saveEditedQuestion = () => {
-    if (!editorQuiz || editingQuestionIndex === null) return;
-    if (!editorQuestion.text || !editorQuestion.opt1) return alert("Question text and option 1 are required.");
-    const updatedQuestions = [...(editorQuiz.questions || [])];
-    updatedQuestions[editingQuestionIndex] = {
-      ...updatedQuestions[editingQuestionIndex],
-      text: editorQuestion.text,
-      options: [editorQuestion.opt1, editorQuestion.opt2, editorQuestion.opt3, editorQuestion.opt4],
-      correctOption: parseInt(editorQuestion.correct, 10)
-    };
-    setEditorQuiz({ ...editorQuiz, questions: updatedQuestions });
-    resetEditorQuestionDraft();
-  };
-
-  const addQuestionToSelectedQuiz = () => {
-    if (!editorQuiz) return;
-    if (!editorQuestion.text || !editorQuestion.opt1) return alert("Question text and option 1 are required.");
-    const newQ = {
-      id: `q${Date.now()}`,
-      text: editorQuestion.text,
-      options: [editorQuestion.opt1, editorQuestion.opt2, editorQuestion.opt3, editorQuestion.opt4],
-      correctOption: parseInt(editorQuestion.correct, 10)
-    };
-    setEditorQuiz({ ...editorQuiz, questions: [...(editorQuiz.questions || []), newQ] });
-    resetEditorQuestionDraft();
-  };
-
-  const saveEditedQuiz = async () => {
-    if (!editorQuiz) return;
-    if (!editorQuiz.title || (editorQuiz.questions?.length || 0) === 0) return alert("Quiz title and at least one question are required.");
-    if (!editorQuiz.collegeYear || !editorQuiz.semester) return alert("Year and Semester are required.");
-    await ApiService.updateQuiz(editorQuiz.id, {
-      ...editorQuiz,
-      timeLimit: parseInt(editorQuiz.timeLimit, 10),
-      collegeYear: parseInt(editorQuiz.collegeYear, 10),
-      semester: parseInt(editorQuiz.semester, 10)
-    });
-    alert("Quiz updated successfully.");
-    onCreated();
-  };
-
-  return (
-    <div className="space-y-6">
-      <div className="space-y-4">
-        <h3 className="font-semibold text-gray-700">Create New Quiz</h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <Input label="Quiz Title" value={quiz.title} onChange={e => setQuiz({...quiz, title: e.target.value})} />
-          <Input label="Time Limit (mins)" type="number" value={quiz.timeLimit} onChange={e => setQuiz({...quiz, timeLimit: e.target.value})} />
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <Select 
-             label="College Year" 
-             options={['1','2','3','4'].map(y => ({value:y, label:`${y} Year`}))}
-             value={quiz.collegeYear} 
-             onChange={e => setQuiz({...quiz, collegeYear: e.target.value})} 
-          />
-          <Select 
-             label="Semester" 
-             options={['1','2','3','4','5','6','7','8'].map(s => ({value:s, label:`Semester ${s}`}))}
-             value={quiz.semester} 
-             onChange={e => setQuiz({...quiz, semester: e.target.value})} 
-          />
-        </div>
-        
-        <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
-          <h4 className="font-semibold mb-3 force-black-text">Add Question</h4>
-          <Input className="mb-2" placeholder="Question Text" value={currentQ.text} onChange={e => setCurrentQ({...currentQ, text: e.target.value})} />
-          <div className="grid grid-cols-2 gap-2 mb-2">
-              <Input placeholder="Option 1" value={currentQ.opt1} onChange={e => setCurrentQ({...currentQ, opt1: e.target.value})} />
-              <Input placeholder="Option 2" value={currentQ.opt2} onChange={e => setCurrentQ({...currentQ, opt2: e.target.value})} />
-              <Input placeholder="Option 3" value={currentQ.opt3} onChange={e => setCurrentQ({...currentQ, opt3: e.target.value})} />
-              <Input placeholder="Option 4" value={currentQ.opt4} onChange={e => setCurrentQ({...currentQ, opt4: e.target.value})} />
-          </div>
-          <div className="force-black-label">
-            <Select label="Correct Option" options={[{value:'0', label:'Option 1'}, {value:'1', label:'Option 2'}, {value:'2', label:'Option 3'}, {value:'3', label:'Option 4'}]} value={currentQ.correct} onChange={e => setCurrentQ({...currentQ, correct: parseInt(e.target.value)})} />
-          </div>
-          <Button onClick={addQuestion} variant="secondary" className="mt-2 w-full force-black-text">Add Question</Button>
-        </div>
-
-        <div className="border-t pt-4">
-          <h4 className="font-semibold mb-2">Questions ({quiz.questions?.length})</h4>
-          <Button onClick={saveQuiz} className="w-full">Create Quiz Template</Button>
-        </div>
-      </div>
-
-      <div className="border-t pt-6">
-         <h3 className="font-semibold text-gray-700 mb-4 force-black-text">My Created Quizzes</h3>
-         <div className="space-y-2 max-h-60 overflow-y-auto">
-            {quizzes.map(q => (
-              <div
-                key={q.id}
-                onClick={() => setSelectedTemplateId(q.id)}
-                className={`p-3 border rounded flex justify-between items-center bg-white cursor-pointer transition-colors ${selectedTemplateId === q.id ? 'ring-2 ring-indigo-500 border-indigo-400' : 'hover:bg-gray-50'}`}
-              >
-                 <div>
-                    <div className="font-bold force-black-text">{q.title}</div>
-                    <div className="text-xs text-gray-500">
-                       {q.questions.length} Qs | {q.timeLimit} Mins | Year {q.collegeYear} Sem {q.semester}
-                    </div>
-                 </div>
-                 <button
-                   onClick={(e) => { e.stopPropagation(); deleteQuiz(q.id); }}
-                   className="text-red-500 hover:bg-red-50 p-2 rounded"
-                 >
-                   <Trash2 size={16}/>
-                 </button>
-              </div>
-            ))}
-            {quizzes.length === 0 && <p className="text-gray-400 text-center">No quizzes created yet.</p>}
-         </div>
-
-         {editorQuiz && (
-           <div className="mt-6 p-4 rounded-lg border border-indigo-200 bg-indigo-50/40 space-y-4">
-             <div className="flex items-center justify-between">
-               <h4 className="font-bold text-indigo-700">Edit Quiz: {editorQuiz.title}</h4>
-               <Button size="sm" variant="outline" onClick={() => setSelectedTemplateId('')}>Close</Button>
-             </div>
-
-             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-               <Input label="Quiz Title" value={editorQuiz.title || ''} onChange={e => setEditorQuiz({ ...editorQuiz, title: e.target.value })} />
-               <Input label="Time Limit (mins)" type="number" value={editorQuiz.timeLimit || ''} onChange={e => setEditorQuiz({ ...editorQuiz, timeLimit: e.target.value })} />
-             </div>
-             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-               <Select
-                 label="College Year"
-                 options={['1','2','3','4'].map(y => ({ value: y, label: `${y} Year` }))}
-                 value={String(editorQuiz.collegeYear || '')}
-                 onChange={e => setEditorQuiz({ ...editorQuiz, collegeYear: e.target.value })}
-               />
-               <Select
-                 label="Semester"
-                 options={['1','2','3','4','5','6','7','8'].map(s => ({ value: s, label: `Semester ${s}` }))}
-                 value={String(editorQuiz.semester || '')}
-                 onChange={e => setEditorQuiz({ ...editorQuiz, semester: e.target.value })}
-               />
-             </div>
-
-             <div className="space-y-2 max-h-72 overflow-y-auto border rounded-lg p-3 bg-white">
-               {(editorQuiz.questions || []).map((q, idx) => (
-                 <div key={q.id || idx} className="p-3 border rounded-lg">
-                   <div className="flex items-start justify-between gap-2">
-                     <div>
-                       <div className="font-semibold">Q{idx + 1}. {q.text}</div>
-                       <div className="text-xs text-gray-500 mt-1">Correct: Option {(Number(q.correctOption) || 0) + 1}</div>
-                     </div>
-                     <Button size="sm" variant="outline" onClick={() => loadQuestionIntoEditor(idx)}>Edit</Button>
-                   </div>
-                   <ul className="mt-2 text-sm text-gray-700 space-y-1">
-                     {(q.options || []).map((opt, optIdx) => (
-                       <li key={optIdx}>Option {optIdx + 1}: {opt}</li>
-                     ))}
-                   </ul>
-                 </div>
-               ))}
-               {(editorQuiz.questions || []).length === 0 && <div className="text-sm text-gray-500 text-center py-4">No questions in this quiz.</div>}
-             </div>
-
-             <div className="p-3 rounded-lg border bg-white space-y-3">
-               <h5 className="font-semibold">{editingQuestionIndex !== null ? `Edit Question ${editingQuestionIndex + 1}` : 'Add New Question'}</h5>
-               <Input placeholder="Question Text" value={editorQuestion.text} onChange={e => setEditorQuestion({ ...editorQuestion, text: e.target.value })} />
-               <div className="grid grid-cols-2 gap-2">
-                 <Input placeholder="Option 1" value={editorQuestion.opt1} onChange={e => setEditorQuestion({ ...editorQuestion, opt1: e.target.value })} />
-                 <Input placeholder="Option 2" value={editorQuestion.opt2} onChange={e => setEditorQuestion({ ...editorQuestion, opt2: e.target.value })} />
-                 <Input placeholder="Option 3" value={editorQuestion.opt3} onChange={e => setEditorQuestion({ ...editorQuestion, opt3: e.target.value })} />
-                 <Input placeholder="Option 4" value={editorQuestion.opt4} onChange={e => setEditorQuestion({ ...editorQuestion, opt4: e.target.value })} />
-               </div>
-               <Select
-                 label="Correct Option"
-                 options={[{ value: '0', label: 'Option 1' }, { value: '1', label: 'Option 2' }, { value: '2', label: 'Option 3' }, { value: '3', label: 'Option 4' }]}
-                 value={editorQuestion.correct}
-                 onChange={e => setEditorQuestion({ ...editorQuestion, correct: e.target.value })}
-               />
-               <div className="flex gap-2">
-                 {editingQuestionIndex !== null ? (
-                   <>
-                     <Button variant="secondary" onClick={saveEditedQuestion}>Save Question</Button>
-                     <Button variant="outline" onClick={resetEditorQuestionDraft}>Cancel</Button>
-                   </>
-                 ) : (
-                   <Button variant="secondary" onClick={addQuestionToSelectedQuiz}>Add Question To Quiz</Button>
-                 )}
-               </div>
-             </div>
-
-             <div className="flex justify-end">
-               <Button onClick={saveEditedQuiz}><Save size={16}/> Save Quiz Changes</Button>
-             </div>
-           </div>
-         )}
-      </div>
-    </div>
-  );
-};
-
-const QuizAssigner = ({ quizzes, user, onAssigned }) => {
-  const [selectedQuiz, setSelectedQuiz] = useState('');
-  const [division, setDivision] = useState(DIVISIONS[0]);
-  const [department, setDepartment] = useState(DEPARTMENTS[0]);
-  const [filterYear, setFilterYear] = useState('');
-  const [filterSem, setFilterSem] = useState('');
-
-  const filteredQuizzes = quizzes.filter(q => {
-     if(filterYear && q.collegeYear !== parseInt(filterYear)) return false;
-     if(filterSem && q.semester !== parseInt(filterSem)) return false;
-     return true;
-  });
-
-  const handleAssign = async () => {
-    if (!selectedQuiz) return;
-    const quiz = quizzes.find(q => q.id === selectedQuiz);
-    
-    await ApiService.assignTest({
-      id: `ta${Date.now()}`,
-      quizId: quiz.id,
-      quizTitle: quiz.title,
-      assignedBy: user.id,
-      division,
-      department,
-      assignedDate: new Date().toISOString(),
-      isActive: false
-    });
-    alert(`Assigned ${quiz.title} to ${department} - Div ${division}`);
-    onAssigned();
-  };
-
-  return (
-    <div className="max-w-xl mx-auto space-y-4 py-4">
-       <div className="grid grid-cols-2 gap-4">
-          <Select 
-             label="Filter Year" 
-             options={['1','2','3','4'].map(y => ({value:y, label:`${y} Year`}))}
-             value={filterYear} 
-             onChange={e => setFilterYear(e.target.value)} 
-          />
-          <Select 
-             label="Filter Semester" 
-             options={['1','2','3','4','5','6','7','8'].map(s => ({value:s, label:`Semester ${s}`}))}
-             value={filterSem} 
-             onChange={e => setFilterSem(e.target.value)} 
-          />
-       </div>
-
-       <Select 
-          label="Select Quiz Template" 
-          options={filteredQuizzes.map(q => ({value: q.id, label: `${q.title} (Yr ${q.collegeYear})`}))} 
-          value={selectedQuiz} 
-          onChange={e => setSelectedQuiz(e.target.value)} 
-       />
-       
-       <div className="grid grid-cols-2 gap-4">
-          <Select label="Department" options={DEPARTMENTS.map(d => ({value:d, label:d}))} value={department} onChange={e => setDepartment(e.target.value)} />
-          <Select label="Division" options={DIVISIONS.map(d => ({value:d, label:d}))} value={division} onChange={e => setDivision(e.target.value)} />
-       </div>
-       <Button onClick={handleAssign} className="w-full">Assign to Class</Button>
-    </div>
-  );
-};
-
-const AssignedTestsList = ({ assignments, onUpdate }) => {
-  const toggleActive = async (a) => {
-    await ApiService.updateTestAssignment(a.id, { isActive: !a.isActive });
-    onUpdate();
-  };
-  
-  const deleteAssignment = async (id) => {
-    if(!window.confirm("Remove this assignment?")) return;
-    await ApiService.deleteTestAssignment(id);
-    onUpdate();
-  };
-
-  return (
-    <div className="space-y-3">
-       {assignments.map(a => (
-         <div key={a.id} className="p-4 border rounded-lg flex justify-between items-center bg-white">
-            <div>
-               <h4 className="font-bold">{a.quizTitle}</h4>
-               <p className="text-sm text-gray-500">{a.department} - Div {a.division}</p>
-            </div>
-            <div className="flex items-center gap-2">
-               <Button variant={a.isActive ? 'danger' : 'primary'} size="sm" onClick={() => toggleActive(a)}>
-                  {a.isActive ? <><StopCircle size={16} /> Stop</> : <><PlayCircle size={16} /> Start Test</>}
-               </Button>
-               <button onClick={() => deleteAssignment(a.id)} className="text-red-500 hover:bg-red-50 p-2 rounded"><Trash2 size={18}/></button>
-            </div>
-         </div>
-       ))}
-       {assignments.length === 0 && <p className="text-center text-gray-500">No tests assigned yet.</p>}
-    </div>
-  );
-};
-
-const TestResultsList = ({ results, onUpdate }) => {
-  const [filterDept, setFilterDept] = useState('');
-  const [filterDiv, setFilterDiv] = useState('');
-  const [filterYear, setFilterYear] = useState('');
-  const [filterSem, setFilterSem] = useState('');
-  const [pruneMonths, setPruneMonths] = useState('');
-
-  const filteredResults = results.filter(r => {
-     if(filterDept && r.department !== filterDept) return false;
-     if(filterDiv && r.division !== filterDiv) return false;
-     if(filterYear && r.collegeYear !== parseInt(filterYear)) return false;
-     if(filterSem && r.semester !== parseInt(filterSem)) return false;
-     return true;
-  });
-
-  const exportCSV = () => {
-     if(filteredResults.length === 0) return alert("No data to export");
-     const headers = ["College Year", "Semester", "PRN", "Student Name", "Division", "Department", "Test Name", "Score", "Total", "Date"];
-     const rows = filteredResults.map(r => [
-        r.collegeYear || '',
-        r.semester || '',
-        r.prn || '',
-        r.studentName,
-        r.division,
-        r.department,
-        r.quizTitle,
-        r.score,
-        r.totalQuestions,
-        new Date(r.date).toLocaleDateString()
-     ]);
-     
-     const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
-     const blob = new Blob([csvContent], { type: 'text/csv' });
-     const url = window.URL.createObjectURL(blob);
-     const a = document.createElement('a');
-     a.href = url;
-     a.download = `results_export.csv`;
-     a.click();
-  };
-
-  const handlePrune = async () => {
-     if(!pruneMonths) return alert("Enter months");
-     if(!confirm(`Delete records older than ${pruneMonths} months?`)) return;
-     const res = await ApiService.pruneResults(parseInt(pruneMonths));
-     alert(`Deleted ${res.deletedCount} old records.`);
-     onUpdate();
-  };
-
-  return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-         <Select options={DEPARTMENTS.map(d=>({value:d, label:d}))} value={filterDept} onChange={e=>setFilterDept(e.target.value)} label="Dept"/>
-         <Select options={DIVISIONS.map(d=>({value:d, label:d}))} value={filterDiv} onChange={e=>setFilterDiv(e.target.value)} label="Div"/>
-         <Select options={['1','2','3','4'].map(y=>({value:y, label:`Yr ${y}`}))} value={filterYear} onChange={e=>setFilterYear(e.target.value)} label="Year"/>
-         <Select options={['1','2','3','4','5','6','7','8'].map(s=>({value:s, label:`Sem ${s}`}))} value={filterSem} onChange={e=>setFilterSem(e.target.value)} label="Sem"/>
-      </div>
-      
-      <div className="flex justify-between items-center bg-gray-50 p-2 rounded">
-         <Button size="sm" variant="secondary" onClick={exportCSV}><Download size={16}/> Export CSV</Button>
-         <div className="flex items-center gap-2">
-            <input type="number" placeholder="Months old" className="ui-input w-24 py-1" value={pruneMonths} onChange={e=>setPruneMonths(e.target.value)} />
-            <Button size="sm" variant="danger" onClick={handlePrune}>Clear Old</Button>
-         </div>
-      </div>
-
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm text-left">
-          <thead className="bg-gray-50 text-xs uppercase">
-            <tr>
-              <th className="px-4 py-2">PRN</th>
-              <th className="px-4 py-2">Student</th>
-              <th className="px-4 py-2">Test</th>
-              <th className="px-4 py-2">Score</th>
-              <th className="px-4 py-2">Yr/Sem</th>
-              <th className="px-4 py-2">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filteredResults.map(r => (
-              <tr key={r.id} className="border-b">
-                <td className="px-4 py-2 text-xs font-mono">{r.prn || '-'}</td>
-                <td className="px-4 py-2 font-medium">
-                   {r.studentName}
-                   <div className="text-xs text-gray-400">{r.department} {r.division}</div>
-                </td>
-                <td className="px-4 py-2">{r.quizTitle}</td>
-                <td className="px-4 py-2 text-indigo-600 font-bold">{r.score} / {r.totalQuestions}</td>
-                <td className="px-4 py-2">{r.collegeYear ? `Y${r.collegeYear} S${r.semester}` : '-'}</td>
-                <td className="px-4 py-2">
-                   {r.submissionType === 'VIOLATION_AUTO_SUBMIT' ? 
-                      <Badge color="red">Auto</Badge> : 
-                      <Badge color="green">Ok</Badge>
-                   }
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-};
-
 const ClassroomGroupsManager = ({ user }) => {
   const [groups, setGroups] = useState([]);
+  const [selected, setSelected] = useState(null);
+  const [message, setMessage] = useState('');
+  const [msgs, setMsgs] = useState([]);
   const [mode, setMode] = useState('GROUPS');
   const [newGroupName, setNewGroupName] = useState('');
   const [joinKey, setJoinKey] = useState('');
-  const [selectedGroup, setSelectedGroup] = useState(null);
-  const [message, setMessage] = useState('');
-  const [pendingFile, setPendingFile] = useState(null);
-  const [activeMessages, setActiveMessages] = useState([]);
-  const [unreadMap, setUnreadMap] = useState({});
-  const pollRef = useRef(0);
-  const bottomRef = useRef(null);
-  const forceAutoScrollRef = useRef(false);
 
-  useEffect(() => {
-    fetchGroups();
-    const interval = setInterval(fetchGroups, 7000);
-    return () => clearInterval(interval);
-  }, [selectedGroup?.id]);
-
-  useEffect(() => {
-    if (!activeMessages.length) return;
-    if (forceAutoScrollRef.current) {
-      bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-      forceAutoScrollRef.current = false;
-    }
-  }, [activeMessages]);
-
-  const fetchGroups = async () => {
+  const load = async () => {
     const all = await ApiService.getClassroomGroups();
-    const mine = all.filter(g => g.teacherId === user.id || g.studentIds.includes(user.id));
-    const getLatestForGroup = (g) => {
-      const apiLatest = latestTimestamp(g.messages || []);
-      const localLatest = localStorage.getItem(classroomChatSyncKey(g.id)) || '';
-      if (!apiLatest) return localLatest;
-      if (!localLatest) return apiLatest;
-      return new Date(apiLatest) > new Date(localLatest) ? apiLatest : localLatest;
-    };
-    const sorted = [...mine].sort((a, b) => {
-      const aTs = getLatestForGroup(a);
-      const bTs = getLatestForGroup(b);
-      if (!aTs && !bTs) return 0;
-      if (!aTs) return 1;
-      if (!bTs) return -1;
-      return new Date(bTs) - new Date(aTs);
+    setGroups((all || []).filter((g) => g.teacherId === user.id || (g.studentIds || []).includes(user.id)));
+  };
+
+  useEffect(() => { load(); }, []);
+
+  useEffect(() => {
+    if (mode !== 'CHAT' || !selected?.id) return;
+    const t = setInterval(async () => {
+      if (document.visibilityState !== 'visible') return;
+      const fresh = await ApiService.getClassroomGroupMessages(selected.id);
+      setMsgs(fresh || []);
+      const c = groupChatCacheKey(selected.id);
+      const s = groupChatSyncKey(selected.id);
+      localStorage.setItem(c, JSON.stringify(fresh || []));
+      if ((fresh || []).length) localStorage.setItem(s, fresh[fresh.length - 1].timestamp);
+      else localStorage.removeItem(s);
+    }, 4000);
+    return () => clearInterval(t);
+  }, [mode, selected?.id]);
+
+  const open = async (g) => {
+    setSelected(g);
+    setMode('CHAT');
+    const c = groupChatCacheKey(g.id);
+    const s = groupChatSyncKey(g.id);
+    try {
+      const cached = JSON.parse(localStorage.getItem(c) || '[]');
+      if (Array.isArray(cached)) setMsgs(cached);
+    } catch (_) {}
+    const fresh = await ApiService.getClassroomGroupMessages(g.id);
+    setMsgs(() => {
+      const n = fresh || [];
+      localStorage.setItem(c, JSON.stringify(n));
+      if (n.length) localStorage.setItem(s, n[n.length - 1].timestamp);
+      else localStorage.removeItem(s);
+      return n;
     });
-    const unread = {};
-    sorted.forEach(g => {
-      const latest = getLatestForGroup(g);
-      const seen = localStorage.getItem(classroomSeenKey(user.id, g.id)) || '';
-      unread[g.id] = !!latest && (!seen || new Date(latest) > new Date(seen)) && selectedGroup?.id !== g.id;
-    });
-    setUnreadMap(unread);
-    setGroups(sorted);
   };
 
   const createGroup = async () => {
-    if (!newGroupName) return;
+    if (!newGroupName.trim()) return;
     const key = Math.random().toString(36).substring(2, 8).toUpperCase();
     await ApiService.addClassroomGroup({
       id: `cg${Date.now()}`,
-      name: newGroupName,
+      name: newGroupName.trim(),
       joinKey: key,
       teacherId: user.id,
       teacherName: user.fullName,
@@ -774,705 +1514,461 @@ const ClassroomGroupsManager = ({ user }) => {
       messages: []
     });
     setNewGroupName('');
-    fetchGroups();
+    await load();
     alert(`Group Created! Key: ${key}`);
     setMode('KEYS');
   };
 
-  const deleteGroup = async (g) => {
-    if(!window.confirm("Delete group? This will remove it for all members.")) return;
-    await ApiService.deleteClassroomGroup(g.id);
-    fetchGroups();
-    setSelectedGroup(null);
-    setMode('GROUPS');
-  };
-
   const joinGroup = async () => {
     const all = await ApiService.getClassroomGroups();
-    const group = all.find(g => g.joinKey === joinKey.toUpperCase());
-    if (!group) return alert("Invalid Key");
-    if (group.teacherId === user.id) return alert("You created this group.");
-    if (group.studentIds.includes(user.id)) return alert("Already joined.");
-    
+    const group = (all || []).find((g) => g.joinKey === joinKey.toUpperCase());
+    if (!group) return alert('Invalid Key');
+    if (group.teacherId === user.id) return alert('You created this group.');
+    if ((group.studentIds || []).includes(user.id)) return alert('Already joined.');
     await ApiService.updateClassroomGroup(group.id, {
       ...group,
-      studentIds: [...group.studentIds, user.id]
+      studentIds: [...(group.studentIds || []), user.id]
     });
-    alert("Joined Group!");
+    alert('Joined Group!');
     setJoinKey('');
-    fetchGroups();
+    await load();
     setMode('GROUPS');
   };
 
-  const syncMessages = async (groupId, forceFull = false) => {
-    const cacheKey = classroomChatCacheKey(groupId);
-    const syncKey = classroomChatSyncKey(groupId);
-    const since = forceFull ? '' : (localStorage.getItem(syncKey) || '');
-    const fresh = await ApiService.getClassroomGroupMessages(groupId, { since: since || undefined });
-    setActiveMessages(prev => {
-      const next = forceFull ? fresh : mergeChatsById(prev, fresh);
-      localStorage.setItem(cacheKey, JSON.stringify(next));
-      const ts = latestTimestamp(next);
-      if (ts) localStorage.setItem(syncKey, ts);
-      localStorage.setItem(classroomSeenKey(user.id, groupId), ts || '');
-      return next;
-    });
-    setUnreadMap(prev => ({ ...prev, [groupId]: false }));
+  const deleteGroup = async (g) => {
+    if (!window.confirm('Delete group? This will remove it for all members.')) return;
+    await ApiService.deleteClassroomGroup(g.id);
+    await load();
+    if (selected?.id === g.id) setSelected(null);
+    setMode('GROUPS');
   };
 
-  const openChat = async (group) => {
-    setSelectedGroup(group);
-    setMode('CHAT');
-    forceAutoScrollRef.current = true;
-    pollRef.current = 0;
-    const cacheKey = classroomChatCacheKey(group.id);
-    try {
-      const cached = JSON.parse(localStorage.getItem(cacheKey) || '[]');
-      setActiveMessages(Array.isArray(cached) ? cached : []);
-    } catch (_) {
-      setActiveMessages([]);
-    }
-    await syncMessages(group.id, false);
-  };
-
-  useEffect(() => {
-    if (mode !== 'CHAT' || !selectedGroup?.id) return;
-    const interval = setInterval(async () => {
-      pollRef.current += 1;
-      await syncMessages(selectedGroup.id, pollRef.current % 12 === 0);
-    }, 2000);
-    return () => clearInterval(interval);
-  }, [mode, selectedGroup?.id]);
-
-  const sendMessage = async () => {
-    if ((!message.trim() && !pendingFile) || !selectedGroup) return;
-    const msgData = {
+  const send = async () => {
+    if (!selected || !message.trim()) return;
+    const m = {
       id: `cm${Date.now()}`,
       senderId: user.id,
       senderName: user.fullName,
       role: 'TEACHER',
       message: message.trim(),
-      fileName: pendingFile?.fileName || '',
-      fileType: pendingFile?.fileType || '',
-      fileData: pendingFile?.fileData || '',
       timestamp: new Date().toISOString()
     };
-    await ApiService.addClassroomGroupMessage(selectedGroup.id, msgData);
-    const cacheKey = classroomChatCacheKey(selectedGroup.id);
-    const syncKey = classroomChatSyncKey(selectedGroup.id);
-    setActiveMessages(prev => {
-      const next = mergeChatsById(prev, [msgData]);
-      localStorage.setItem(cacheKey, JSON.stringify(next));
-      const ts = latestTimestamp(next);
-      if (ts) localStorage.setItem(syncKey, ts);
-      localStorage.setItem(classroomSeenKey(user.id, selectedGroup.id), ts || '');
-      return next;
-    });
+    await ApiService.addClassroomGroupMessage(selected.id, m);
+    setMsgs((p) => merge(p, [m]));
     setMessage('');
-    setPendingFile(null);
-    forceAutoScrollRef.current = true;
-    fetchGroups();
   };
 
   const deleteMessage = async (messageId) => {
-    if (!selectedGroup?.id) return;
-    await ApiService.deleteClassroomGroupMessage(selectedGroup.id, messageId, user.id);
-    const cacheKey = classroomChatCacheKey(selectedGroup.id);
-    const syncKey = classroomChatSyncKey(selectedGroup.id);
-    setActiveMessages(prev => {
-      const next = prev.filter(m => m.id !== messageId);
-      localStorage.setItem(cacheKey, JSON.stringify(next));
-      const ts = latestTimestamp(next);
-      if (ts) localStorage.setItem(syncKey, ts);
+    if (!selected?.id) return;
+    await ApiService.deleteClassroomGroupMessage(selected.id, messageId, user.id);
+    const c = groupChatCacheKey(selected.id);
+    const s = groupChatSyncKey(selected.id);
+    setMsgs((prev) => {
+      const next = prev.filter((m) => m.id !== messageId);
+      localStorage.setItem(c, JSON.stringify(next));
+      if (next.length) {
+        localStorage.setItem(s, next[next.length - 1].timestamp);
+      } else {
+        localStorage.removeItem(s);
+      }
       return next;
     });
-    fetchGroups();
-  };
-
-  const handleAttachment = (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (!/\.(ppt|pptx|doc|docx|xls|xlsx)$/i.test(file.name)) {
-      alert('Only PPT, Word, and Excel files are allowed.');
-      e.target.value = '';
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = () => {
-      setPendingFile({
-        fileName: file.name,
-        fileType: file.type || 'application/octet-stream',
-        fileData: reader.result
-      });
-    };
-    reader.readAsDataURL(file);
-    e.target.value = '';
   };
 
   return (
     <Card title="Classroom Groups">
-       <div className="flex gap-2 mb-4 overflow-x-auto pb-2">
-          <Button variant={mode === 'GROUPS' ? 'primary' : 'outline'} size="sm" onClick={() => setMode('GROUPS')}>My Groups</Button>
-          <Button variant={mode === 'CREATE' ? 'primary' : 'outline'} size="sm" onClick={() => setMode('CREATE')}>Create</Button>
-          <Button variant={mode === 'KEYS' ? 'primary' : 'outline'} size="sm" onClick={() => setMode('KEYS')}>Group Keys</Button>
-          <Button variant={mode === 'JOIN' ? 'primary' : 'outline'} size="sm" onClick={() => setMode('JOIN')}>Join Group</Button>
-       </div>
+      <div className="flex gap-2 mb-4 overflow-x-auto pb-2">
+        <Button variant={mode === 'GROUPS' ? 'primary' : 'outline'} size="sm" onClick={() => setMode('GROUPS')}>My Groups</Button>
+        <Button variant={mode === 'CREATE' ? 'primary' : 'outline'} size="sm" onClick={() => setMode('CREATE')}>Create</Button>
+        <Button variant={mode === 'KEYS' ? 'primary' : 'outline'} size="sm" onClick={() => setMode('KEYS')}>Group Keys</Button>
+        <Button variant={mode === 'JOIN' ? 'primary' : 'outline'} size="sm" onClick={() => setMode('JOIN')}>Join Group</Button>
+      </div>
 
-       {mode === 'GROUPS' && (
-         <div className="grid gap-3">
-            {groups.map(g => (
-              <div key={g.id} className="p-3 border rounded bg-white hover:shadow-md cursor-pointer flex justify-between items-center" onClick={() => openChat(g)}>
-                 <div>
-                    <div className="font-bold flex items-center gap-2">
-                      <span className="text-black">{g.name}</span>
-                      {unreadMap[g.id] && <span className="w-2.5 h-2.5 rounded-full bg-red-500"></span>}
-                    </div>
-                    <div className="text-xs text-gray-500">{g.teacherId === user.id ? 'Created by Me' : `Teacher: ${g.teacherName}`}</div>
-                 </div>
-                 <div className="flex items-center gap-2">
-                   {g.teacherId === user.id && (
-                     <button onClick={(e) => { e.stopPropagation(); deleteGroup(g); }} className="text-red-500 hover:bg-red-50 p-1 rounded"><Trash2 size={16}/></button>
-                   )}
-                   <MessageCircle size={20} className="text-indigo-600"/>
-                 </div>
+      {mode === 'GROUPS' && (
+        <div className="grid gap-3">
+          {groups.map((g) => (
+            <div key={g.id} className="p-3 border rounded bg-white hover:shadow-md cursor-pointer flex justify-between items-center" onClick={() => open(g)}>
+              <div>
+                <div className="font-bold text-black">{g.name}</div>
+                <div className="text-xs text-gray-500">{g.teacherId === user.id ? 'Created by Me' : `Teacher: ${g.teacherName}`}</div>
+              </div>
+              <div className="flex items-center gap-2">
+                {g.teacherId === user.id && (
+                  <button onClick={(e) => { e.stopPropagation(); deleteGroup(g); }} className="text-red-500 hover:bg-red-50 p-1 rounded"><Trash2 size={16} /></button>
+                )}
+                <Send size={16} className="text-indigo-600" />
+              </div>
+            </div>
+          ))}
+          {groups.length === 0 && <p className="text-gray-400 text-center py-4">No groups yet.</p>}
+        </div>
+      )}
+
+      {mode === 'CREATE' && (
+        <div className="max-w-sm mx-auto py-4 space-y-3">
+          <Input label="Group Name" value={newGroupName} onChange={(e) => setNewGroupName(e.target.value)} />
+          <Button onClick={createGroup} className="w-full">Generate Key & Create</Button>
+        </div>
+      )}
+
+      {mode === 'KEYS' && (
+        <div className="space-y-2">
+          {groups.filter((g) => g.teacherId === user.id).map((g) => (
+            <div key={g.id} className="p-3 bg-indigo-50 border border-indigo-100 rounded flex justify-between">
+              <span className="font-semibold text-black">{g.name}</span>
+              <span className="font-mono bg-white px-2 rounded border text-black">{g.joinKey}</span>
+            </div>
+          ))}
+          {groups.filter((g) => g.teacherId === user.id).length === 0 && <p className="text-center text-gray-400">You haven't created any groups.</p>}
+        </div>
+      )}
+
+      {mode === 'JOIN' && (
+        <div className="max-w-sm mx-auto py-4 space-y-3">
+          <Input label="Enter Group Key" value={joinKey} onChange={(e) => setJoinKey(e.target.value)} />
+          <Button onClick={joinGroup} className="w-full">Join Group</Button>
+        </div>
+      )}
+
+      {mode === 'CHAT' && selected && (
+        <div className="h-[500px] flex flex-col">
+          <div className="border-b pb-2 mb-2 flex justify-between items-center">
+            <h3 className="font-bold text-black">{selected.name}</h3>
+            <Button size="sm" variant="outline" onClick={() => setMode('GROUPS')}>Back</Button>
+          </div>
+          <div className="h-[420px] overflow-y-auto bg-gray-50 p-4 rounded mb-4 space-y-3 chat-scroll-mini group-chat-scrollbar">
+            {msgs.map((m) => (
+              <div key={m.id || m.timestamp} className={`p-2 rounded max-w-[80%] group text-black ${m.senderId === user.id ? 'ml-auto bg-indigo-100' : 'bg-white border'}`}>
+                <div className="flex justify-between items-baseline gap-2">
+                  <span className="font-bold text-xs text-black">{m.senderName}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] text-black/60">{new Date(m.timestamp).toLocaleTimeString()}</span>
+                    {m.senderId === user.id && (
+                      <button onClick={() => deleteMessage(m.id)} className="text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <Trash2 size={12} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+                {m.message && <p className="text-sm text-black">{m.message}</p>}
               </div>
             ))}
-            {groups.length === 0 && <p className="text-gray-400 text-center py-4">No groups yet.</p>}
-         </div>
-       )}
-
-       {mode === 'CREATE' && (
-         <div className="max-w-sm mx-auto py-4 space-y-3">
-            <Input label="Group Name" value={newGroupName} onChange={e => setNewGroupName(e.target.value)} />
-            <Button onClick={createGroup} className="w-full">Generate Key & Create</Button>
-         </div>
-       )}
-
-       {mode === 'KEYS' && (
-         <div className="space-y-2">
-            {groups.filter(g => g.teacherId === user.id).map(g => (
-               <div key={g.id} className="p-3 bg-indigo-50 border border-indigo-100 rounded flex justify-between">
-                  <span className="font-semibold text-black">{g.name}</span>
-                  <span className="font-mono bg-white px-2 rounded border text-black">{g.joinKey}</span>
-               </div>
-            ))}
-            {groups.filter(g => g.teacherId === user.id).length === 0 && <p className="text-center text-gray-400">You haven't created any groups.</p>}
-         </div>
-       )}
-
-       {mode === 'JOIN' && (
-         <div className="max-w-sm mx-auto py-4 space-y-3">
-            <Input label="Enter Group Key" value={joinKey} onChange={e => setJoinKey(e.target.value)} />
-            <Button onClick={joinGroup} className="w-full">Join Group</Button>
-         </div>
-       )}
-
-       {mode === 'CHAT' && selectedGroup && (
-          <div className="h-[500px] flex flex-col">
-             <div className="border-b pb-2 mb-2 flex justify-between items-center">
-                <h3 className="font-bold">{selectedGroup.name}</h3>
-                <Button size="sm" variant="outline" onClick={() => setMode('GROUPS')}>Back</Button>
-             </div>
-             <div className="h-[420px] overflow-y-auto bg-gray-50 p-4 rounded mb-4 space-y-3 chat-scroll-mini group-chat-scrollbar">
-                {activeMessages.map((m) => (
-                   <div key={m.id || m.timestamp} className={`p-2 rounded max-w-[80%] group text-black ${m.senderId === user.id ? 'ml-auto bg-indigo-100' : 'bg-white border'}`}>
-                      <div className="flex justify-between items-baseline gap-2">
-                         <span className="font-bold text-xs text-black">{m.senderName}</span>
-                         <div className="flex items-center gap-2">
-                           <span className="text-[10px] text-black/60">{new Date(m.timestamp).toLocaleTimeString()}</span>
-                           {m.senderId === user.id && (
-                             <button onClick={() => deleteMessage(m.id)} className="text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity">
-                               <Trash2 size={12} />
-                             </button>
-                           )}
-                         </div>
-                      </div>
-                      {m.message && <p className="text-sm text-black">{m.message}</p>}
-                      {m.fileData && m.fileName && (
-                        <a
-                          href={m.fileData}
-                          download={m.fileName}
-                          className="mt-1 inline-flex items-center gap-1 text-xs text-indigo-700 underline break-all"
-                        >
-                          <FileText size={12} /> {m.fileName}
-                        </a>
-                      )}
-                   </div>
-                ))}
-                <div ref={bottomRef} />
-             </div>
-             {selectedGroup.teacherId === user.id ? (
-               <>
-                 {pendingFile && (
-                   <div className="text-xs text-indigo-700 mb-2 px-1 flex items-center justify-between">
-                     <span className="truncate">Attachment: {pendingFile.fileName}</span>
-                     <button className="text-red-600" onClick={() => setPendingFile(null)}>Remove</button>
-                   </div>
-                 )}
-                 <div className="flex gap-2">
-                    <Input placeholder="Message..." value={message} onChange={e => setMessage(e.target.value)} className="mb-0 flex-1" />
-                    <label className="inline-flex items-center justify-center px-3 border rounded-lg cursor-pointer hover:bg-gray-50" title="Attach PPT/Word/Excel">
-                      <Paperclip size={16} />
-                      <input type="file" className="hidden" accept=".ppt,.pptx,.doc,.docx,.xls,.xlsx" onChange={handleAttachment} />
-                    </label>
-                    <Button onClick={sendMessage}><Send size={18}/></Button>
-                 </div>
-               </>
-             ) : (
-               <div className="p-2 bg-gray-100 text-xs text-center text-gray-500 rounded">
-                 Read Only Channel
-               </div>
-             )}
+            {msgs.length === 0 && <div className="text-center text-gray-500 py-4">No messages yet.</div>}
           </div>
-       )}
+          <div className="flex gap-2 mt-2">
+            <Input value={message} onChange={(e) => setMessage(e.target.value)} className="mb-0 flex-1" placeholder="Message..." />
+            <Button onClick={send}><Send size={16} /></Button>
+          </div>
+        </div>
+      )}
     </Card>
   );
 };
 
 const GuideTab = ({ user }) => {
-  const [assignedGroups, setAssignedGroups] = useState([]);
-  const [selectedGroup, setSelectedGroup] = useState(null);
-  const [groupMeta, setGroupMeta] = useState({});
+  const [rows, setRows] = useState([]);
+  const [selectedId, setSelectedId] = useState('');
+  const [scoreMap, setScoreMap] = useState({});
+  const [remarks, setRemarks] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [groupChats, setGroupChats] = useState([]);
+  const [groupChatMessage, setGroupChatMessage] = useState('');
 
-  useEffect(() => {
-    const fetchGroups = async () => {
-      const allAssignments = await ApiService.getAssignments();
-      const allProjects = await ApiService.getProjects();
-      const allGroups = await ApiService.getGroups();
-
-      const myProjects = allProjects.filter(p => p.guideId === user.id);
-      const myProjectIds = myProjects.map(p => p.id);
-      const relevantAssignments = allAssignments.filter(a => myProjectIds.includes(a.projectId));
-
-      const displayData = relevantAssignments.map(a => {
-        const project = myProjects.find(p => p.id === a.projectId);
-        const group = allGroups.find(g => g.id === a.groupId);
-        return {
-          id: a.id,
-          projectId: project?.id,
-          groupId: group?.id,
-          title: project?.title,
-          leader: group?.groupLeader,
-          project
-        };
+  const load = async () => {
+    const [assignments, projects, groups, submissions, marks, ideas] = await Promise.all([
+      ApiService.getAssignments(),
+      ApiService.getProjects(),
+      ApiService.getGroups(),
+      ApiService.getSubmissions(),
+      ApiService.getMarks(),
+      ApiService.getProjectIdeas()
+    ]);
+    const myProjectIds = (projects || []).filter((p) => p.guideId === user.id).map((p) => p.id);
+    const items = (assignments || [])
+      .filter((a) => myProjectIds.includes(a.projectId))
+      .map((a) => {
+        const project = (projects || []).find((p) => p.id === a.projectId) || null;
+        const group = (groups || []).find((g) => g.id === a.groupId) || null;
+        const submission = (submissions || []).find((s) => s.assignmentId === a.id) || null;
+        const mark = (marks || []).find((m) => m.groupId === a.groupId && m.projectId === a.projectId) || null;
+        const idea = (ideas || []).find((i) => i.assignmentId === a.id) || null;
+        return { assignment: a, project, group, submission, mark, idea };
       });
-      setAssignedGroups(displayData);
-    };
-    fetchGroups();
-  }, [user.id]);
-
-  useEffect(() => {
-    if (assignedGroups.length === 0) return;
-    const groupIds = assignedGroups.map(g => g.groupId);
-
-    const refreshGroupMeta = async () => {
-      const allChats = await ApiService.getChats({ targetType: 'GROUP' });
-      const relevant = allChats.filter(c => groupIds.includes(c.targetId));
-      const latestByGroup = {};
-      relevant.forEach(chat => {
-        const prev = latestByGroup[chat.targetId];
-        if (!prev || new Date(chat.timestamp) > new Date(prev.timestamp)) {
-          latestByGroup[chat.targetId] = { timestamp: chat.timestamp };
-        }
-      });
-
-      const nextMeta = {};
-      groupIds.forEach(groupId => {
-        const latest = latestByGroup[groupId]?.timestamp || '';
-        const seen = localStorage.getItem(guideLastSeenKey(user.id, groupId)) || '';
-        const unread = !!latest && (!seen || new Date(latest) > new Date(seen)) && selectedGroup !== groupId;
-        nextMeta[groupId] = { latest, unread };
-      });
-      setGroupMeta(nextMeta);
-    };
-
-    refreshGroupMeta();
-    const interval = setInterval(refreshGroupMeta, 5000);
-    return () => clearInterval(interval);
-  }, [assignedGroups, selectedGroup, user.id]);
-
-  const sortedGroups = [...assignedGroups].sort((a, b) => {
-    const aTs = groupMeta[a.groupId]?.latest || '';
-    const bTs = groupMeta[b.groupId]?.latest || '';
-    if (!aTs && !bTs) return 0;
-    if (!aTs) return 1;
-    if (!bTs) return -1;
-    return new Date(bTs) - new Date(aTs);
-  });
-
-  const openGroup = (groupId) => {
-    setSelectedGroup(groupId);
-    const latest = groupMeta[groupId]?.latest;
-    if (latest) {
-      localStorage.setItem(guideLastSeenKey(user.id, groupId), latest);
-      setGroupMeta(prev => ({ ...prev, [groupId]: { ...(prev[groupId] || {}), unread: false } }));
-    }
+    setRows(items);
+    if (!selectedId && items.length) setSelectedId(items[0].assignment.id);
   };
 
-  return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-      <div className="space-y-4">
-        <h3 className="font-semibold text-gray-700">My Project Groups</h3>
-        {sortedGroups.map(g => (
-          <div 
-            key={g.id} 
-            onClick={() => openGroup(g.groupId)}
-            className={`p-4 rounded-xl cursor-pointer border transition-all ${selectedGroup === g.groupId ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white hover:bg-gray-50 border-gray-200'}`}
-          >
-            <div className="flex items-center justify-between">
-              <h4 className={`font-bold ${selectedGroup === g.groupId ? 'text-white' : 'text-black'}`}>{g.title}</h4>
-              {groupMeta[g.groupId]?.unread && <span className="w-2.5 h-2.5 rounded-full bg-red-500"></span>}
-            </div>
-            <p className={`text-sm ${selectedGroup === g.groupId ? 'text-white/80' : 'text-black/80'}`}>Leader: {g.leader}</p>
-          </div>
-        ))}
-      </div>
-      
-      <div className="lg:col-span-2">
-        {selectedGroup ? (
-           <GroupWorkspace groupId={selectedGroup} user={user} projectData={assignedGroups.find(g => g.groupId === selectedGroup)} />
-        ) : (
-          <div className="h-64 flex items-center justify-center text-gray-400 bg-white rounded-xl border border-dashed">
-            Select a group to manage
-          </div>
-        )}
-      </div>
-    </div>
-  );
-};
+  useEffect(() => { load(); }, [user.id]);
 
-const GroupWorkspace = ({ groupId, user, projectData }) => {
-  const [chats, setChats] = useState([]);
-  const [msg, setMsg] = useState('');
-  const [rubricScores, setRubricScores] = useState([]);
-  const [progress, setProgress] = useState(0);
-  const [isSubmitted, setIsSubmitted] = useState(false);
-  const [markEntry, setMarkEntry] = useState(null);
-  const [submission, setSubmission] = useState(null);
-  const bottomRef = useRef(null);
-  const chatContainerRef = useRef(null);
-  const forceAutoScrollRef = useRef(true);
-  const groupRef = useRef(groupId);
-  const pollCountRef = useRef(0);
+  const selected = rows.find((x) => x.assignment.id === selectedId) || null;
+  const selectedGroupId = selected?.assignment?.groupId || '';
+  const updateIdeaStatus = async (nextStatus) => {
+    if (!selected?.idea) return;
+    const payload = {
+      ...selected.idea,
+      status: nextStatus,
+      reviewedBy: user.id,
+      reviewedByName: user.fullName,
+      reviewedAt: new Date().toISOString()
+    };
+    await ApiService.updateProjectIdea(selected.idea.id, payload);
+    await load();
+  };
 
-  // Sync with student updates (assignment progress)
-  const [studentProgress, setStudentProgress] = useState(0);
-  const projectRubrics = Array.isArray(projectData?.project?.rubrics) ? projectData.project.rubrics : [];
-  const totalProjectMarks = Number(projectData?.project?.totalMarks || projectRubrics.reduce((s, r) => s + (Number(r.maxMarks) || 0), 0));
-  const totalObtainedMarks = rubricScores.reduce((sum, r) => sum + (Number(r.obtainedMarks) || 0), 0);
+  useEffect(() => {
+    if (!selectedGroupId) {
+      setGroupChats([]);
+      return;
+    }
+    const sync = async () => {
+      const chats = await ApiService.getChats({ targetId: selectedGroupId, targetType: 'GROUP' });
+      setGroupChats((chats || []).sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp)));
+    };
+    sync();
+    const interval = setInterval(sync, 6000);
+    return () => clearInterval(interval);
+  }, [selectedGroupId]);
 
-  const getInitialRubricScores = (existingMark) => {
-    const existingScores = Array.isArray(existingMark?.rubricScores) ? existingMark.rubricScores : [];
-    const byTitle = new Map(existingScores.map(r => [r.title, r]));
-    return projectRubrics.map(r => {
-      const prev = byTitle.get(r.title);
-      return {
-        title: r.title,
-        maxMarks: Number(r.maxMarks) || 0,
-        obtainedMarks: prev?.obtainedMarks ?? ''
-      };
+  useEffect(() => {
+    if (!selected) return;
+    const rubrics = selected.project?.rubrics || [];
+    const existing = selected.mark?.rubricScores || [];
+    const next = {};
+    rubrics.forEach((r) => {
+      const found = existing.find((e) => e.title === r.title);
+      next[r.title] = Number(found?.obtainedMarks ?? 0);
     });
+    setScoreMap(next);
+    setRemarks(selected.mark?.rubrics || '');
+  }, [selectedId, selected?.mark?.id]);
+
+  const totalMarks = selected?.project?.totalMarks || 0;
+  const rubricList = selected?.project?.rubrics || [];
+  const totalObtained = rubricList.reduce((sum, r) => sum + (Number(scoreMap[r.title]) || 0), 0);
+
+  const saveMarks = async (submitToAdmin) => {
+    if (!selected) return;
+    if (!selected.submission) {
+      alert('Marks can be assigned only after student submission.');
+      return;
+    }
+    setSaving(true);
+    try {
+      const payload = {
+        id: selected.mark?.id || `mk${Date.now()}`,
+        groupId: selected.assignment.groupId,
+        projectId: selected.assignment.projectId,
+        teacherMarks: totalObtained,
+        isSubmittedToAdmin: !!submitToAdmin,
+        adminMarks: selected.mark?.adminMarks || 0,
+        projectLink: selected.submission?.link || '',
+        rubrics: remarks || '',
+        rubricScores: rubricList.map((r) => ({
+          title: r.title,
+          maxMarks: Number(r.maxMarks) || 0,
+          obtainedMarks: Math.max(0, Math.min(Number(r.maxMarks) || 0, Number(scoreMap[r.title]) || 0))
+        })),
+        progress: Number(selected.assignment.progress || 0)
+      };
+      await ApiService.saveMark(payload);
+      if (submitToAdmin) {
+        await ApiService.updateAssignment(selected.assignment.id, { ...selected.assignment, status: 'GRADED' });
+      }
+      await load();
+      alert(submitToAdmin ? 'Marks submitted to admin.' : 'Marks saved.');
+    } finally {
+      setSaving(false);
+    }
   };
 
-  // Load initial data and saved marks on group selection
-  useEffect(() => {
-    const loadInitialData = async () => {
-      const allMarks = await ApiService.getMarks();
-      const existingMark = allMarks.find(m => m.groupId === groupId && m.projectId === projectData.projectId);
-
-      // Check assignment for student progress & submission
-      const allAssignments = await ApiService.getAssignments();
-      const assign = allAssignments.find(a => a.id === projectData.id);
-      if (assign) setStudentProgress(assign.progress || 0);
-
-      const allSubs = await ApiService.getSubmissions();
-      const sub = allSubs.find(s => s.assignmentId === projectData.id);
-      setSubmission(sub || null);
-      
-      if (existingMark) {
-        setMarkEntry(existingMark);
-        setRubricScores(getInitialRubricScores(existingMark));
-        setProgress(existingMark.progress || 0);
-        setIsSubmitted(existingMark.isSubmittedToAdmin);
-      } else {
-        setMarkEntry(null);
-        setRubricScores(getInitialRubricScores(null));
-        setProgress(0);
-        setIsSubmitted(false);
-      }
-    };
-    loadInitialData();
-  }, [groupId, projectData]);
-
-  // Auto-refresh only chats and submission status, NOT form inputs
-  useEffect(() => {
-    groupRef.current = groupId;
-    const cacheKey = groupChatCacheKey(groupId);
-    const syncKey = groupChatSyncKey(groupId);
-    try {
-      const cached = JSON.parse(localStorage.getItem(cacheKey) || '[]');
-      if (Array.isArray(cached) && cached.length > 0) {
-        forceAutoScrollRef.current = true;
-        setChats(cached);
-      }
-    } catch (_) {}
-
-    const refreshChatsAndStatus = async () => {
-      pollCountRef.current += 1;
-      const isFullSync = pollCountRef.current % 6 === 0;
-      const since = isFullSync ? '' : (localStorage.getItem(syncKey) || '');
-      const freshChats = await ApiService.getChats({ since: since || undefined, targetType: 'GROUP', targetId: groupId });
-      setChats(prev => {
-        const next = isFullSync ? freshChats : mergeChatsById(prev, freshChats);
-        localStorage.setItem(cacheKey, JSON.stringify(next));
-        const ts = latestTimestamp(next);
-        if (ts) localStorage.setItem(syncKey, ts);
-        return next;
-      });
-      
-      const allSubs = await ApiService.getSubmissions();
-      const sub = allSubs.find(s => s.assignmentId === projectData.id);
-      setSubmission(sub || null);
-    };
-    const interval = setInterval(refreshChatsAndStatus, 5000);
-    return () => clearInterval(interval);
-  }, [groupId, projectData]);
-
-  // Scroll to bottom when new messages arrive or group changes, but not on every refresh
-  const prevChatCountRef = useRef(0);
-
-  useEffect(() => {
-    // Scroll when new messages are added or group first loads
-    if (chats.length !== prevChatCountRef.current) {
-      const shouldScroll = forceAutoScrollRef.current || isNearBottom(chatContainerRef.current);
-      if (shouldScroll) {
-        setTimeout(() => {
-          bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-        }, 0);
-      }
-      forceAutoScrollRef.current = false;
-      prevChatCountRef.current = chats.length;
-    }
-  }, [chats]);
-
-  const sendChat = async () => {
-    if (!msg.trim()) return;
-    const newChat = {
+  const sendGroupChat = async () => {
+    const text = groupChatMessage.trim();
+    if (!selectedGroupId || !text) return;
+    const payload = {
       id: `c${Date.now()}`,
       senderId: user.id,
       senderName: user.fullName,
-      targetId: groupId,
+      targetId: selectedGroupId,
       targetType: 'GROUP',
-      message: msg.trim(),
+      message: text,
       timestamp: new Date().toISOString()
     };
-    await ApiService.addChat(newChat);
-    const cacheKey = groupChatCacheKey(groupId);
-    const syncKey = groupChatSyncKey(groupId);
-    setChats(prev => {
-      const merged = mergeChatsById(prev, [newChat]);
-      localStorage.setItem(cacheKey, JSON.stringify(merged));
-      const ts = latestTimestamp(merged);
-      if (ts) localStorage.setItem(syncKey, ts);
-      return merged;
-    });
-    forceAutoScrollRef.current = true;
-    setMsg('');
+    await ApiService.addChat(payload);
+    setGroupChats((prev) => merge(prev, [payload]));
+    setGroupChatMessage('');
   };
 
-  const deleteMessage = async (id) => {
-    await ApiService.deleteChat(id);
-    const activeGroupId = groupRef.current;
-    const cacheKey = groupChatCacheKey(activeGroupId);
-    const syncKey = groupChatSyncKey(activeGroupId);
-    setChats(prev => {
-      const next = prev.filter(c => c.id !== id);
-      localStorage.setItem(cacheKey, JSON.stringify(next));
-      const ts = latestTimestamp(next);
-      if (ts) localStorage.setItem(syncKey, ts);
-      return next;
-    });
-  };
-
-  const setRubricScoreAt = (idx, value) => {
-    const numeric = value === '' ? '' : Number(value);
-    setRubricScores(prev => prev.map((r, i) => i === idx ? { ...r, obtainedMarks: Number.isFinite(numeric) ? numeric : '' } : r));
-  };
-
-  const validateRubricScores = (requireAllFilled = false) => {
-    if (projectRubrics.length === 0) return { ok: false, error: 'No rubrics configured by admin for this project.' };
-    for (const r of rubricScores) {
-      const obtained = r.obtainedMarks === '' ? '' : Number(r.obtainedMarks);
-      if (requireAllFilled && (obtained === '' || Number.isNaN(obtained))) {
-        return { ok: false, error: `Enter marks for rubric: ${r.title}` };
-      }
-      if (obtained === '' || Number.isNaN(obtained)) continue;
-      if (obtained < 0) return { ok: false, error: `Marks cannot be negative for rubric: ${r.title}` };
-      if (obtained > Number(r.maxMarks)) {
-        return { ok: false, error: `Marks for "${r.title}" cannot exceed ${r.maxMarks}` };
-      }
-    }
-    return { ok: true };
-  };
-
-  const saveProgress = async () => {
-    const validation = validateRubricScores(false);
-    if (!validation.ok) return alert(validation.error);
-    const normalizedScores = rubricScores.map(r => ({
-      title: r.title,
-      maxMarks: Number(r.maxMarks) || 0,
-      obtainedMarks: Number(r.obtainedMarks) || 0
-    }));
-    const entry = {
-      id: markEntry?.id || `m${Date.now()}`,
-      groupId,
-      projectId: projectData.projectId,
-      teacherMarks: normalizedScores.reduce((sum, r) => sum + r.obtainedMarks, 0),
-      rubrics: normalizedScores.map(r => `${r.title}:${r.obtainedMarks}/${r.maxMarks}`).join(', '),
-      rubricScores: normalizedScores,
-      progress: parseInt(progress),
-      isSubmittedToAdmin: isSubmitted
-    };
-    const saved = await ApiService.saveMark(entry);
-    setMarkEntry(saved || entry);
-    alert("Draft saved");
-  };
-
-  const submitMarks = async () => {
-    if (!submission) return alert("Student group has not submitted the project yet.");
-    const validation = validateRubricScores(true);
-    if (!validation.ok) return alert(validation.error);
-    const normalizedScores = rubricScores.map(r => ({
-      title: r.title,
-      maxMarks: Number(r.maxMarks) || 0,
-      obtainedMarks: Number(r.obtainedMarks) || 0
-    }));
-    
-    const entry = {
-      id: markEntry?.id || `m${Date.now()}`,
-      groupId,
-      projectId: projectData.projectId,
-      teacherMarks: normalizedScores.reduce((sum, r) => sum + r.obtainedMarks, 0),
-      rubrics: normalizedScores.map(r => `${r.title}:${r.obtainedMarks}/${r.maxMarks}`).join(', '),
-      rubricScores: normalizedScores,
-      progress: 100,
-      isSubmittedToAdmin: true
-    };
-    const saved = await ApiService.saveMark(entry);
-    setMarkEntry(saved || entry);
-    setIsSubmitted(true);
-    setProgress(100);
-  };
-
-  const unsubmitMarks = async () => {
-    if(!isSubmitted) return;
-    const entry = {
-      ...markEntry,
-      isSubmittedToAdmin: false
-    };
-    await ApiService.saveMark(entry);
-    setIsSubmitted(false);
+  const deleteGroupChat = async (chatId) => {
+    await ApiService.deleteChat(chatId);
+    setGroupChats((prev) => prev.filter((item) => item.id !== chatId));
   };
 
   return (
-    <div className="space-y-6">
-      <Card title="Project Tracking & Grading">
-         <div className="space-y-4">
-           {submission ? (
-              <div className="bg-green-50 p-3 rounded text-sm text-green-700 mb-2 flex items-center justify-between">
-                 <span>Submitted on {new Date(submission.submissionDate).toLocaleDateString()}</span>
-                 <div className="flex gap-2">
-                    {submission.link && <a href={submission.link} target="_blank" className="underline flex items-center gap-1"><Link size={14}/> Link</a>}
-                    {submission.fileName && <span className="flex items-center gap-1"><FileText size={14}/> {submission.fileName}</span>}
-                 </div>
-              </div>
-           ) : (
-              <div className="bg-yellow-50 p-3 rounded text-sm text-yellow-700 mb-2 flex items-center gap-2">
-                 <AlertTriangle size={16}/> Student has not submitted project file/link yet.
-              </div>
-           )}
-
-           <div className="bg-blue-50 p-3 rounded text-sm text-blue-700 mb-2">
-             Student Self-Reported Progress: <span className="font-bold">{studentProgress}%</span>
-           </div>
-           
-           <div className="space-y-3">
-             <div className="flex items-center justify-between">
-               <label className="ui-label mb-0">Rubric-wise Marks</label>
-               <div className="text-sm font-semibold text-indigo-700">
-                 Total: {totalObtainedMarks} / {totalProjectMarks}
-               </div>
-             </div>
-             {projectRubrics.length > 0 ? (
-               <div className="space-y-2">
-                 {rubricScores.map((r, idx) => (
-                   <div key={`${r.title}-${idx}`} className="grid grid-cols-1 md:grid-cols-12 gap-2 items-center p-2 rounded border border-gray-200">
-                     <div className="md:col-span-6">
-                       <div className="font-medium text-sm">{r.title}</div>
-                     </div>
-                     <div className="md:col-span-3 text-sm text-gray-500">
-                       Max: {r.maxMarks}
-                     </div>
-                     <div className="md:col-span-3">
-                       <input
-                         type="number"
-                         min="0"
-                         max={r.maxMarks}
-                         className="ui-input mb-0"
-                         value={r.obtainedMarks}
-                         onChange={(e) => setRubricScoreAt(idx, e.target.value)}
-                         disabled={isSubmitted}
-                       />
-                     </div>
-                   </div>
-                 ))}
-               </div>
-             ) : (
-               <div className="text-sm text-red-600 bg-red-50 p-3 rounded">
-                 No rubrics configured by admin for this project.
-               </div>
-             )}
-           </div>
-
-           <div className="flex justify-end gap-2 pt-2">
-             {!isSubmitted && <Button variant="outline" onClick={saveProgress}>Save Draft</Button>}
-             {isSubmitted ? (
-               <div className="flex items-center gap-2">
-                  <Badge color="green">Submitted to Admin</Badge>
-                  <Button size="sm" variant="secondary" onClick={unsubmitMarks}>Unsubmit</Button>
-               </div>
-             ) : (
-               <Button onClick={submitMarks} disabled={!submission || projectRubrics.length === 0}><Save size={16} /> Finalize & Submit</Button>
-             )}
-           </div>
-         </div>
+    <div className="guide-tab grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <Card title="Assigned Groups">
+        <div className="space-y-2 max-h-[560px] overflow-y-auto">
+          {rows.map((r) => {
+            const isSelected = r.assignment.id === selectedId;
+            return (
+              <button
+                key={r.assignment.id}
+                onClick={() => setSelectedId(r.assignment.id)}
+                className={`w-full text-left p-3 rounded border ${isSelected ? 'border-indigo-400 bg-indigo-50' : 'border-gray-200 bg-white hover:bg-gray-50'}`}
+              >
+                <div className="font-semibold text-black">{r.project?.title || 'Untitled Project'}</div>
+                <div className="text-sm text-gray-700">Leader: {r.group?.groupLeader || '-'}</div>
+                <div className="text-xs text-gray-500">Group {r.group?.groupNo ?? '-'} | {r.group?.department || '-'} | Div {r.group?.division || '-'} | Sem {r.group?.semester || '-'}</div>
+                <div className="text-xs mt-1">
+                  <span className={`px-2 py-0.5 rounded ${r.submission ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-800'}`}>
+                    {r.submission ? 'Submitted' : 'Not Submitted'}
+                  </span>
+                </div>
+              </button>
+            );
+          })}
+          {rows.length === 0 && <div className="text-gray-500 text-center py-6">No groups assigned yet.</div>}
+        </div>
       </Card>
 
-      <Card title={`Chat with ${projectData.leader}'s Group`} className="chat-box">
-        <div ref={chatContainerRef} className="chat-messages">
-           {chats.map(c => (
-             <div key={c.id} className={`chat-msg group ${c.senderId === user.id ? 'ml-auto bg-indigo-50 dark:bg-indigo-900 border-indigo-100 dark:border-indigo-700 max-w-[80%]' : 'mr-auto max-w-[80%]'}`}>
-               <div className="flex justify-between items-baseline gap-2">
-                  <div className="chat-sender dark:!text-black">{c.senderName}</div>
-                  <div className="flex items-center gap-2">
-                    <div className="text-[10px] text-gray-400 dark:!text-black/70">{new Date(c.timestamp).toLocaleTimeString()}</div>
-                    {c.senderId === user.id && (
-                      <button onClick={() => deleteMessage(c.id)} className="text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <Trash2 size={12} />
-                      </button>
-                    )}
+      <div className="lg:col-span-2">
+        {!selected ? (
+          <Card><div className="text-gray-500 text-center py-10">Select an assigned group.</div></Card>
+        ) : (
+          <Card title="Group Details">
+            <div className="space-y-4">
+              <div className="p-3 rounded border bg-white">
+                <div className="font-semibold text-black">{selected.project?.title || '-'}</div>
+                <div className="text-sm text-gray-700">Group No: {selected.group?.groupNo ?? '-'}</div>
+                <div className="text-sm text-gray-700">Leader: {selected.group?.groupLeader || '-'}</div>
+                <div className="text-sm text-gray-700">Status: {selected.assignment.status || 'ASSIGNED'}</div>
+                <div className="text-sm text-gray-700">Progress: {selected.assignment.progress || 0}%</div>
+              </div>
+
+              <div className="p-3 rounded border bg-white">
+                <div className="font-semibold text-black mb-2">Submission</div>
+                {selected.submission ? (
+                  <div className="space-y-1 text-sm text-black">
+                    <div>Topic: {selected.submission.topicName || '-'}</div>
+                    <div>Submitted: {new Date(selected.submission.submissionDate).toLocaleString()}</div>
+                    <div>File: {selected.submission.fileName || '-'}</div>
+                    <div>
+                      Link: {selected.submission.link ? (
+                        <a href={selected.submission.link} target="_blank" rel="noreferrer" className="text-indigo-700 underline break-all">{selected.submission.link}</a>
+                      ) : '-'}
+                    </div>
                   </div>
-               </div>
-               {c.message && <div className="text-sm text-gray-900 dark:!text-black">{c.message}</div>}
-             </div>
-           ))}
-           <div ref={bottomRef} />
-        </div>
-        <div className="flex gap-2">
-          <Input placeholder="Message group..." value={msg} onChange={e => setMsg(e.target.value)} className="mb-0 flex-1" />
-          <Button onClick={sendChat}><Send size={18} /></Button>
-        </div>
-      </Card>
+                ) : (
+                  <div className="text-sm text-yellow-700">Student has not submitted yet.</div>
+                )}
+              </div>
+
+              <div className="p-3 rounded border bg-white">
+                <div className="font-semibold text-black mb-2">Project Idea</div>
+                {selected.idea ? (
+                  <div className="space-y-2 text-sm text-black">
+                    <div>Idea: {selected.idea.ideaTitle || '-'}</div>
+                    <div>Status: <span className="font-semibold">{selected.idea.status || 'PENDING'}</span></div>
+                    <div>Submitted: {selected.idea.submittedAt ? new Date(selected.idea.submittedAt).toLocaleString() : '-'}</div>
+                    <div className="flex gap-2 mt-2">
+                      <Button size="sm" variant="secondary" className="text-black" onClick={() => updateIdeaStatus('APPROVED')}>Approve</Button>
+                      <Button size="sm" variant="danger" onClick={() => updateIdeaStatus('CHANGES_REQUESTED')}>Request Changes</Button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-sm text-gray-600">No idea submitted yet.</div>
+                )}
+              </div>
+
+              <div className="p-3 rounded border bg-white">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="font-semibold text-black">Rubric Marks</div>
+                  <div className="text-sm text-indigo-700 font-semibold">{totalObtained} / {totalMarks}</div>
+                </div>
+                {rubricList.length > 0 ? (
+                  <div className="space-y-2">
+                    {rubricList.map((r, idx) => (
+                      <div key={`${r.title}_${idx}`} className="grid grid-cols-1 md:grid-cols-12 gap-2 items-center border rounded p-2">
+                        <div className="md:col-span-6 text-sm font-medium text-black">{r.title}</div>
+                        <div className="md:col-span-3 text-xs text-gray-500">Max: {r.maxMarks}</div>
+                        <div className="md:col-span-3">
+                          <input
+                            type="number"
+                            min="0"
+                            max={Number(r.maxMarks) || 0}
+                            className="ui-input mb-0"
+                            value={String(scoreMap[r.title] ?? 0)}
+                            disabled={!selected.submission}
+                            onChange={(e) => setScoreMap((prev) => ({ ...prev, [r.title]: e.target.value }))}
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-sm text-red-700">No rubrics configured for this project.</div>
+                )}
+
+                <div className="mt-3">
+                  <label className="ui-label">Teacher Remarks</label>
+                  <textarea
+                    className="ui-input min-h-[90px]"
+                    value={remarks}
+                    disabled={!selected.submission}
+                    onChange={(e) => setRemarks(e.target.value)}
+                    placeholder="Add remarks..."
+                  />
+                </div>
+
+                <div className="flex gap-2 mt-3">
+                  <Button variant="secondary" className="text-black" disabled={saving || !selected.submission} onClick={() => saveMarks(false)}>
+                    Save Marks
+                  </Button>
+                  <Button disabled={saving || !selected.submission} onClick={() => saveMarks(true)}>
+                    Submit To Admin
+                  </Button>
+                </div>
+                {selected.mark?.isSubmittedToAdmin && (
+                  <div className="text-sm text-green-700 mt-2">Already submitted to admin.</div>
+                )}
+              </div>
+
+              <div className="p-3 rounded border bg-white">
+                <div className="font-semibold text-black mb-2">Group Chat</div>
+                <div className="space-y-2 h-[240px] overflow-y-auto rounded border p-2 bg-gray-50 chat-scroll-mini">
+                  {groupChats.map((m) => (
+                    <div
+                      key={m.id || m.timestamp}
+                      className={`guide-chat-message max-w-[82%] p-2 rounded border group ${m.senderId === user.id ? 'ml-auto bg-indigo-100 border-indigo-200 text-black' : 'mr-auto bg-white border-gray-200 text-black'}`}
+                    >
+                      <div className="flex justify-between items-center mb-1 gap-3">
+                        <span className="font-bold text-black text-xs">{m.senderName}</span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] text-black/70">{new Date(m.timestamp).toLocaleString()}</span>
+                          {m.senderId === user.id && (
+                            <button
+                              onClick={() => deleteGroupChat(m.id)}
+                              className="text-gray-500 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity"
+                              title="Delete message"
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      <div className="text-sm">{m.message}</div>
+                    </div>
+                  ))}
+                  {groupChats.length === 0 && <div className="text-center text-gray-500 py-6">No messages yet.</div>}
+                </div>
+                <div className="flex gap-2 mt-2">
+                  <Input value={groupChatMessage} onChange={(e) => setGroupChatMessage(e.target.value)} className="mb-0 flex-1" placeholder="Message this group..." />
+                  <Button onClick={sendGroupChat}><Send size={16} /></Button>
+                </div>
+              </div>
+            </div>
+          </Card>
+        )}
+      </div>
     </div>
   );
 };

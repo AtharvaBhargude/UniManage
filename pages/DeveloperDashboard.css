@@ -74,3 +74,14 @@
   color: #7c3aed;
   border-bottom-color: #7c3aed;
 }
+
+/* Force backend-rendered developer dashboard values to black in light mode */
+:root:not(.dark) .developer-data-text table,
+:root:not(.dark) .developer-data-text th,
+:root:not(.dark) .developer-data-text td,
+:root:not(.dark) .developer-data-text .text-gray-500,
+:root:not(.dark) .developer-data-text .text-gray-600,
+:root:not(.dark) .developer-data-text .text-gray-700,
+:root:not(.dark) .developer-data-text .font-bold {
+  color: #111827 !important;
+}

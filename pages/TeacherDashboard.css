@@ -39,9 +39,9 @@
 }
 
 .sub-menu-btn.active {
-  background-color: #4f46e5;
-  color: white;
-  border-color: #4f46e5;
+  background-color: #c7d2fe;
+  color: #111827;
+  border-color: #818cf8;
 }
 
 .test-grid {
@@ -124,4 +124,209 @@
 
 .dark .force-black-label .ui-select {
   color: #000 !important;
+}
+
+.timetable-table-wrap {
+  overflow-x: auto;
+}
+
+.timetable-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  min-width: 900px;
+}
+
+.timetable-table th,
+.timetable-table td {
+  border: 1px solid #e5e7eb;
+  padding: 0.35rem;
+  text-align: center;
+  vertical-align: top;
+}
+
+.timetable-table thead th {
+  background: #f8fafc;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #334155;
+}
+
+.timetable-table .time-col {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #475569;
+  white-space: nowrap;
+}
+
+.timetable-cell {
+  min-width: 150px;
+  height: 64px;
+  cursor: pointer;
+}
+
+.timetable-cell.selected {
+  outline: 2px solid #4f46e5;
+  outline-offset: -2px;
+}
+
+.timetable-cell.drag-hover {
+  outline: 2px dashed #22c55e;
+  outline-offset: -2px;
+}
+
+.tt-lunch-cell {
+  background: #fff7ed;
+}
+
+.tt-block {
+  border-radius: 0.45rem;
+  padding: 0.35rem;
+  min-height: 54px;
+  position: relative;
+}
+
+.tt-mobile-selected {
+  outline: 2px solid #2563eb;
+  outline-offset: -2px;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.2);
+}
+
+.tt-draggable {
+  cursor: grab;
+}
+
+.tt-draggable:active {
+  cursor: grabbing;
+}
+
+.tt-delete-btn {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 9999px;
+  border: 1px solid #ef4444;
+  background: #fff;
+  color: #ef4444;
+  font-size: 11px;
+  line-height: 1;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.tt-delete-btn:hover {
+  background: #ef4444;
+  color: #fff;
+}
+
+.tt-title {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #1f2937;
+  line-height: 1.2;
+}
+
+.tt-meta {
+  font-size: 0.66rem;
+  color: #334155;
+  margin-top: 0.2rem;
+}
+
+.tt-empty {
+  color: #9ca3af;
+  font-size: 0.9rem;
+}
+
+.tt-lunch-label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #9a3412;
+  background: #fed7aa;
+  border-radius: 0.4rem;
+  padding: 0.35rem;
+}
+
+.timetable-create-form .ui-input-wrapper {
+  margin-bottom: 0;
+}
+
+.timetable-create-action .ui-btn {
+  min-height: 42px;
+}
+
+.timetable-create-subject-col .ui-input-wrapper {
+  margin-bottom: 0;
+}
+
+.tt-added-subject-col .ui-input-wrapper {
+  margin-bottom: 0;
+}
+
+.tt-deleted-card {
+  border: 1px solid #d1d5db;
+  background: #fff;
+  border-radius: 0.5rem;
+  padding: 0.5rem;
+  cursor: grab;
+}
+
+.tt-deleted-card:active {
+  cursor: grabbing;
+}
+
+/* Force backend-rendered Test Management text to black in light mode */
+:root:not(.dark) .teacher-test-management .test-grid,
+:root:not(.dark) .teacher-test-management .table-wrapper table,
+:root:not(.dark) .teacher-test-management .table-wrapper th,
+:root:not(.dark) .teacher-test-management .table-wrapper td,
+:root:not(.dark) .teacher-test-management .text-gray-500,
+:root:not(.dark) .teacher-test-management .text-gray-600,
+:root:not(.dark) .teacher-test-management .text-gray-700,
+:root:not(.dark) .teacher-test-management .font-bold {
+  color: #111827 !important;
+}
+
+/* Keep text readable for teacher dashboard cards in light mode */
+:root:not(.dark) .teacher-dashboard-surface .bg-white,
+:root:not(.dark) .teacher-dashboard-surface .bg-white * {
+  color: #111827;
+}
+
+.teacher-dashboard-surface .bg-black,
+.teacher-dashboard-surface .bg-black *,
+.dark .teacher-dashboard-surface .bg-gray-900,
+.dark .teacher-dashboard-surface .bg-gray-900 *,
+.dark .teacher-dashboard-surface .bg-gray-800,
+.dark .teacher-dashboard-surface .bg-gray-800 * {
+  color: #ffffff;
+}
+
+/* Guide tab dark mode readability fixes */
+.dark .guide-tab .ui-input,
+.dark .guide-tab textarea.ui-input {
+  color: #f9fafb !important;
+  background-color: #1f2937 !important;
+  border-color: #4b5563 !important;
+}
+
+.dark .guide-tab .ui-input::placeholder,
+.dark .guide-tab textarea.ui-input::placeholder {
+  color: #9ca3af !important;
+}
+
+.dark .guide-tab .chat-scroll-mini {
+  background-color: #111827 !important;
+  border-color: #374151 !important;
+}
+
+.dark .guide-tab .guide-chat-message {
+  border-color: #4b5563 !important;
+}
+
+.dark .guide-tab .guide-chat-message,
+.dark .guide-tab .guide-chat-message *,
+.dark .guide-tab .guide-chat-message .text-black,
+.dark .guide-tab .guide-chat-message .text-black\/70 {
+  color: #111827 !important;
 }

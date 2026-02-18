@@ -33,8 +33,11 @@ const ProjectSchema = new mongoose.Schema({
 
 const StudentGroupSchema = new mongoose.Schema({
   id: String,
+  groupNo: Number,
   groupLeader: String,
   department: String,
+  collegeYear: Number,
+  semester: Number,
   division: String,
   groupSize: Number,
   members: [String]
@@ -76,9 +79,23 @@ const SubmissionSchema = new mongoose.Schema({
   assignmentId: String,
   submittedBy: String,
   submissionDate: String,
+  topicName: String,
   link: String,      // URL submission
   fileName: String,  // Simulated file name
   grade: String
+});
+
+const ProjectIdeaSchema = new mongoose.Schema({
+  id: String,
+  assignmentId: String,
+  groupId: String,
+  submittedBy: String,
+  ideaTitle: String,
+  submittedAt: String,
+  status: { type: String, enum: ['PENDING', 'APPROVED', 'CHANGES_REQUESTED'], default: 'PENDING' },
+  reviewedBy: String,
+  reviewedByName: String,
+  reviewedAt: String
 });
 
 const ChatSchema = new mongoose.Schema({
@@ -127,6 +144,7 @@ const QuizResultSchema = new mongoose.Schema({
   id: String,
   quizId: String,
   quizTitle: String,
+  teacherId: String,
   studentId: String,
   studentName: String,
   // Snapshot fields for reporting
@@ -167,6 +185,64 @@ const MarkEntrySchema = new mongoose.Schema({
   progress: { type: Number, default: 0 } // Teacher's view/override
 });
 
+const TimetableSchema = new mongoose.Schema({
+  id: String,
+  createdBy: String,
+  createdByName: String,
+  department: String,
+  collegeYear: Number,
+  semester: Number,
+  division: String,
+  lunchSlotIndex: Number,
+  constraints: [{
+    id: String,
+    subjectName: String,
+    teacherName: String,
+    type: { type: String, enum: ['SUBJECT', 'LAB'] },
+    frequencyPerWeek: Number
+  }],
+  entries: [{
+    blockId: String,
+    subjectName: String,
+    teacherName: String,
+    type: { type: String, enum: ['SUBJECT', 'LAB'] },
+    duration: Number,
+    color: String,
+    day: String,
+    slotIndex: Number
+  }],
+  deletedEntries: [{
+    blockId: String,
+    subjectName: String,
+    teacherName: String,
+    type: { type: String, enum: ['SUBJECT', 'LAB'] },
+    duration: Number,
+    color: String
+  }],
+  addedEntries: [{
+    blockId: String,
+    subjectName: String,
+    teacherName: String,
+    type: { type: String, enum: ['SUBJECT', 'LAB'] },
+    frequencyPerWeek: Number,
+    duration: Number,
+    color: String
+  }],
+  createdAt: String,
+  updatedAt: String
+});
+
+const ReportSchema = new mongoose.Schema({
+  id: String,
+  userId: String,
+  userName: String,
+  userRole: String,
+  department: String,
+  glitch: String,
+  suggestion: String,
+  createdAt: String
+});
+
 const MetricSchema = new mongoose.Schema({
   route: String,
   method: String,
@@ -188,5 +264,8 @@ module.exports = {
   QuizResult: mongoose.model('QuizResult', QuizResultSchema),
   TestViolation: mongoose.model('TestViolation', TestViolationSchema),
   MarkEntry: mongoose.model('MarkEntry', MarkEntrySchema),
+  ProjectIdea: mongoose.model('ProjectIdea', ProjectIdeaSchema),
+  Timetable: mongoose.model('Timetable', TimetableSchema),
+  Report: mongoose.model('Report', ReportSchema),
   Metric: mongoose.model('Metric', MetricSchema)
 };

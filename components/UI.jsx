@@ -1,4 +1,10 @@
-import React from 'react';
+import React, { useId } from 'react';
+
+const toFieldName = (text) => String(text || '')
+  .trim()
+  .toLowerCase()
+  .replace(/[^a-z0-9]+/g, '_')
+  .replace(/^_+|_+$/g, '');
 
 export const Button = ({ variant = 'primary', className = '', ...props }) => {
   return (
@@ -6,11 +12,17 @@ export const Button = ({ variant = 'primary', className = '', ...props }) => {
   );
 };
 
-export const Input = ({ label, className = '', ...props }) => {
+export const Input = ({ label, className = '', id, name, ...props }) => {
+  const rid = useId().replace(/:/g, '');
+  const fieldId = id || `input_${rid}`;
+  const fieldName = name || toFieldName(label) || fieldId;
+
   return (
     <div className="ui-input-wrapper">
-      {label && <label className="ui-label">{label}</label>}
+      {label && <label className="ui-label" htmlFor={fieldId}>{label}</label>}
       <input
+        id={fieldId}
+        name={fieldName}
         className={`ui-input ${className}`}
         {...props}
       />
@@ -18,11 +30,17 @@ export const Input = ({ label, className = '', ...props }) => {
   );
 };
 
-export const Select = ({ label, options, className = '', ...props }) => {
+export const Select = ({ label, options, className = '', id, name, ...props }) => {
+  const rid = useId().replace(/:/g, '');
+  const fieldId = id || `select_${rid}`;
+  const fieldName = name || toFieldName(label) || fieldId;
+
   return (
     <div className="ui-input-wrapper">
-      {label && <label className="ui-label">{label}</label>}
+      {label && <label className="ui-label" htmlFor={fieldId}>{label}</label>}
       <select
+        id={fieldId}
+        name={fieldName}
         className={`ui-select ${className}`}
         {...props}
       >

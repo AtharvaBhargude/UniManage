@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Layout } from '../components/Layout.jsx';
+import { TimetableManager, TestManager } from './TeacherDashboard.jsx';
 import { Button, Input, Select, Card, Badge } from '../components/UI.jsx';
 import { ApiService } from '../services/api.js';
-import { DEPARTMENTS, DIVISIONS } from '../constants.js';
+import { DEPARTMENTS, DIVISIONS, YEARS, getSemestersForYear } from '../constants.js';
 import { 
   PlusCircle, Users, BookOpen, ClipboardList, 
-  CheckCircle, FileText, UserCheck, Award, Trash2, Download, Link, Send, MessageCircle, Paperclip
+  CheckCircle, FileText, UserCheck, Award, Trash2, Download, Link, Send, MessageCircle, Paperclip, CalendarDays
 } from 'lucide-react';
 
 const classroomChatCacheKey = (groupId) => `classroom_chat_cache_${groupId}`;
@@ -20,10 +21,11 @@ const latestTimestamp = (items) => {
   if (!items || items.length === 0) return '';
   return items[items.length - 1].timestamp || '';
 };
-
+const SEMESTERS = ['1', '2', '3', '4', '5', '6', '7', '8'];
 export const AdminDashboard = ({ user, onLogout }) => {
   const [activeTab, setActiveTab] = useState('ADD_PROJECT');
   const [successMsg, setSuccessMsg] = useState(null);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   const [projects, setProjects] = useState([]);
   const [groups, setGroups] = useState([]);
@@ -55,15 +57,18 @@ export const AdminDashboard = ({ user, onLogout }) => {
     setSuccessMsg(msg);
     setTimeout(() => setSuccessMsg(null), 3000);
     loadData();
+    setRefreshKey((prev) => prev + 1);
   };
 
   const tabs = [
+    { id: 'TEST', label: 'Test', icon: ClipboardList },
     { id: 'ADD_PROJECT', label: 'Add Proj', icon: PlusCircle },
     { id: 'ASSIGN_PROJECT', label: 'Assign', icon: UserCheck },
     { id: 'CREATE_GROUP', label: 'Group', icon: Users },
     { id: 'VIEW_GUIDE', label: 'Guides', icon: BookOpen },
     { id: 'VIEW_ASSIGNMENTS', label: 'Assigns', icon: ClipboardList },
     { id: 'SUBMITTED_PROJECTS', label: 'Subs', icon: CheckCircle },
+    { id: 'TIMETABLE', label: 'Timetable', icon: CalendarDays },
     { id: 'CLASSROOM', label: 'Classroom', icon: Users },
     { id: 'USERS', label: 'Users', icon: Users },
     { id: 'MARKS', label: 'Marks', icon: Award }
@@ -92,15 +97,17 @@ export const AdminDashboard = ({ user, onLogout }) => {
       )}
 
       <div className="animate-fadeIn">
+        {activeTab === 'TEST' && <TestManager user={user} />}
         {activeTab === 'ADD_PROJECT' && <AddProjectForm onSuccess={showSuccess} adminId={user.id} />}
-        {activeTab === 'ASSIGN_PROJECT' && <AssignProjectForm projects={projects} groups={groups} teachers={teachers} adminId={user.id} onSuccess={showSuccess} />}
+        {activeTab === 'ASSIGN_PROJECT' && <AssignProjectForm projects={projects} groups={groups} teachers={teachers} assignments={assignments} adminId={user.id} onSuccess={showSuccess} />}
         {activeTab === 'CREATE_GROUP' && <CreateGroupForm onSuccess={showSuccess} />}
         {activeTab === 'VIEW_GUIDE' && <ViewGuidesTable assignments={assignments} groups={groups} projects={projects} teachers={teachers} />}
         {activeTab === 'VIEW_ASSIGNMENTS' && <ViewAssignmentsList assignments={assignments} groups={groups} projects={projects} onSuccess={showSuccess} />}
         {activeTab === 'SUBMITTED_PROJECTS' && <SubmittedProjectsList assignments={assignments} groups={groups} projects={projects} />}
+        {activeTab === 'TIMETABLE' && <TimetableManager user={user} />}
         {activeTab === 'CLASSROOM' && <AdminClassroomManager user={user} />}
         {activeTab === 'USERS' && <UsersManagement onSuccess={showSuccess} />}
-        {activeTab === 'MARKS' && <MarksManager onSuccess={showSuccess} />}
+        {activeTab === 'MARKS' && <MarksManager onSuccess={showSuccess} refreshKey={refreshKey} />}
       </div>
     </Layout>
   );
@@ -122,7 +129,10 @@ const AdminClassroomManager = ({ user }) => {
 
   useEffect(() => {
     fetchGroups();
-    const interval = setInterval(fetchGroups, 7000);
+    const interval = setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      fetchGroups();
+    }, 12000);
     return () => clearInterval(interval);
   }, [selectedGroup?.id]);
 
@@ -238,9 +248,10 @@ const AdminClassroomManager = ({ user }) => {
   useEffect(() => {
     if (mode !== 'CHAT' || !selectedGroup?.id) return;
     const interval = setInterval(async () => {
+      if (document.visibilityState !== 'visible') return;
       pollRef.current += 1;
       await syncMessages(selectedGroup.id, pollRef.current % 12 === 0);
-    }, 2000);
+    }, 4000);
     return () => clearInterval(interval);
   }, [mode, selectedGroup?.id]);
 
@@ -401,28 +412,22 @@ const AdminClassroomManager = ({ user }) => {
                 ))}
                 <div ref={bottomRef} />
              </div>
-             {selectedGroup.teacherId === user.id ? (
-               <>
-                 {pendingFile && (
-                   <div className="text-xs text-indigo-700 mb-2 px-1 flex items-center justify-between">
-                     <span className="truncate">Attachment: {pendingFile.fileName}</span>
-                     <button className="text-red-600" onClick={() => setPendingFile(null)}>Remove</button>
-                   </div>
-                 )}
-                 <div className="flex gap-2">
-                    <Input placeholder="Message..." value={message} onChange={e => setMessage(e.target.value)} className="mb-0 flex-1" />
-                    <label className="inline-flex items-center justify-center px-3 border rounded-lg cursor-pointer hover:bg-gray-50" title="Attach PPT/Word/Excel">
-                      <Paperclip size={16} />
-                      <input type="file" className="hidden" accept=".ppt,.pptx,.doc,.docx,.xls,.xlsx" onChange={handleAttachment} />
-                    </label>
-                    <Button onClick={sendMessage}><Send size={18}/></Button>
+             <>
+               {pendingFile && (
+                 <div className="text-xs text-indigo-700 mb-2 px-1 flex items-center justify-between">
+                   <span className="truncate">Attachment: {pendingFile.fileName}</span>
+                   <button className="text-red-600" onClick={() => setPendingFile(null)}>Remove</button>
                  </div>
-               </>
-             ) : (
-               <div className="p-2 bg-gray-100 text-xs text-center text-gray-500 rounded">
-                 Read Only Channel
+               )}
+               <div className="flex gap-2">
+                  <Input placeholder="Message..." value={message} onChange={e => setMessage(e.target.value)} className="mb-0 flex-1" />
+                  <label htmlFor="admin_chat_attachment" className="inline-flex items-center justify-center px-3 border rounded-lg cursor-pointer hover:bg-gray-50" title="Attach PPT/Word/Excel">
+                    <Paperclip size={16} />
+                    <input id="admin_chat_attachment" name="admin_chat_attachment" type="file" className="hidden" accept=".ppt,.pptx,.doc,.docx,.xls,.xlsx" onChange={handleAttachment} />
+                  </label>
+                  <Button onClick={sendMessage}><Send size={18}/></Button>
                </div>
-             )}
+             </>
           </div>
        )}
     </Card>
@@ -431,13 +436,40 @@ const AdminClassroomManager = ({ user }) => {
 
 const CreateGroupForm = ({ onSuccess }) => {
   const [formData, setFormData] = useState({
-    groupLeader: '', department: '', division: ''
+    groupLeader: '', department: '', collegeYear: '1', semester: '1', division: ''
   });
   const [groupSize, setGroupSize] = useState(3);
-  const [members, setMembers] = useState(['', '']); // Initially 2 members (total 3 with leader)
+  const [members, setMembers] = useState(['', '']);
+  const [groups, setGroups] = useState([]);
+  const [filters, setFilters] = useState({ department: '', collegeYear: '', semester: '', division: '' });
+  const formSemesterOptions = getSemestersForYear(formData.collegeYear);
+  const filterSemesterOptions = getSemestersForYear(filters.collegeYear);
+
+  const loadGroups = async () => {
+    const all = await ApiService.getGroups();
+    setGroups(all || []);
+  };
 
   useEffect(() => {
-    // Adjust members array size when groupSize changes (subtract 1 for leader)
+    loadGroups();
+  }, []);
+
+  useEffect(() => {
+    const valid = getSemestersForYear(formData.collegeYear);
+    if (!valid.includes(String(formData.semester))) {
+      setFormData(prev => ({ ...prev, semester: valid[0] || '' }));
+    }
+  }, [formData.collegeYear]);
+
+  useEffect(() => {
+    if (!filters.collegeYear) return;
+    const valid = getSemestersForYear(filters.collegeYear);
+    if (!valid.includes(String(filters.semester))) {
+      setFilters(prev => ({ ...prev, semester: '' }));
+    }
+  }, [filters.collegeYear]);
+
+  useEffect(() => {
     setMembers(prev => {
       const needed = Math.max(0, groupSize - 1);
       if (prev.length === needed) return prev;
@@ -458,112 +490,200 @@ const CreateGroupForm = ({ onSuccess }) => {
       id: `g${Date.now()}`,
       groupLeader: formData.groupLeader,
       department: formData.department,
+      collegeYear: parseInt(formData.collegeYear, 10),
+      semester: parseInt(formData.semester, 10),
       division: formData.division,
-      groupSize: parseInt(groupSize),
+      groupSize: parseInt(groupSize, 10),
       members: [formData.groupLeader, ...members.filter(m => m.trim() !== '')]
     };
     await ApiService.addGroup(newGroup);
-    setFormData({ groupLeader: '', department: '', division: '' });
+    setFormData({ groupLeader: '', department: '', collegeYear: '1', semester: '1', division: '' });
     setMembers(Array(Math.max(0, groupSize - 1)).fill(''));
+    await loadGroups();
     onSuccess('Student group created successfully!');
   };
 
+  const filteredGroups = groups.filter(g => {
+    if (filters.department && g.department !== filters.department) return false;
+    if (filters.collegeYear && String(g.collegeYear || '') !== String(filters.collegeYear)) return false;
+    if (filters.semester && String(g.semester || '') !== String(filters.semester)) return false;
+    if (filters.division && g.division !== filters.division) return false;
+    return true;
+  });
+
+  const deleteGroup = async (id) => {
+    if (!window.confirm('Delete this group?')) return;
+    await ApiService.deleteGroup(id);
+    await loadGroups();
+    onSuccess('Group deleted.');
+  };
+
+  const deleteFiltered = async () => {
+    if (filteredGroups.length === 0) return;
+    if (!window.confirm(`Delete all ${filteredGroups.length} filtered groups?`)) return;
+    await Promise.all(filteredGroups.map(g => ApiService.deleteGroup(g.id)));
+    await loadGroups();
+    onSuccess('Filtered groups deleted.');
+  };
+
   return (
-    <Card title="Create Student Group" className="max-w-2xl mx-auto">
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-           <Input 
-            label="Group Leader (Username)" 
-            value={formData.groupLeader}
-            onChange={e => setFormData({...formData, groupLeader: e.target.value})}
-            required
-            placeholder="e.g. student1"
-          />
-          <Select 
-            label="Department"
-            options={DEPARTMENTS.map(d => ({ value: d, label: d }))}
-            value={formData.department}
-            onChange={e => setFormData({...formData, department: e.target.value})}
-            required
-          />
-        </div>
-        
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <Select 
-            label="Division"
-            options={DIVISIONS.map(d => ({ value: d, label: d }))}
-            value={formData.division}
-            onChange={e => setFormData({...formData, division: e.target.value})}
-            required
-          />
-          <Input 
-             label="Group Size (Min 1)"
-             type="number"
-             min="1"
-             max="10"
-             value={groupSize}
-             onChange={e => setGroupSize(Math.max(1, parseInt(e.target.value)))}
-             required
-          />
-        </div>
-
-        {members.length > 0 && (
-          <div className="border-t border-gray-100 dark:border-gray-700 pt-4">
-            <label className="ui-label">Group Members</label>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-               {members.map((m, i) => (
-                 <Input 
-                    key={i}
-                    placeholder={`Member ${i + 2} Username`}
-                    value={m}
-                    onChange={e => updateMember(i, e.target.value)}
-                    required
-                />
-               ))}
-            </div>
+    <div className="space-y-6 max-w-5xl mx-auto">
+      <Card title="Create Student Group">
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <Input
+              label="Group Leader (Username)"
+              value={formData.groupLeader}
+              onChange={e => setFormData({...formData, groupLeader: e.target.value})}
+              required
+              placeholder="e.g. student1"
+            />
+            <Select
+              label="Department"
+              options={DEPARTMENTS.map(d => ({ value: d, label: d }))}
+              value={formData.department}
+              onChange={e => setFormData({...formData, department: e.target.value})}
+              required
+            />
           </div>
-        )}
 
-        <Button type="submit" className="w-full">Create Group</Button>
-      </form>
-    </Card>
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <Select label="Year" options={YEARS.map(y => ({ value: y, label: `${y} Year` }))} value={formData.collegeYear} onChange={e => setFormData({...formData, collegeYear: e.target.value})} required />
+            <Select label="Semester" options={formSemesterOptions.map(s => ({ value: s, label: `Sem ${s}` }))} value={formData.semester} onChange={e => setFormData({...formData, semester: e.target.value})} required />
+            <Select label="Division" options={DIVISIONS.map(d => ({ value: d, label: d }))} value={formData.division} onChange={e => setFormData({...formData, division: e.target.value})} required />
+            <Input label="Group Size (Min 1)" type="number" min="1" max="10" value={groupSize} onChange={e => setGroupSize(Math.max(1, parseInt(e.target.value || '1', 10)))} required />
+          </div>
+
+          {members.length > 0 && (
+            <div className="border-t border-gray-100 dark:border-gray-700 pt-4">
+              <div className="ui-label">Group Members</div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {members.map((m, i) => (
+                  <Input key={i} placeholder={`Member ${i + 2} Username`} value={m} onChange={e => updateMember(i, e.target.value)} required />
+                ))}
+              </div>
+            </div>
+          )}
+
+          <Button type="submit" className="w-full">Create Group</Button>
+        </form>
+      </Card>
+
+      <Card title="Created Groups">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4">
+          <Select label="Department" options={DEPARTMENTS.map(d => ({ value: d, label: d }))} value={filters.department} onChange={e => setFilters(prev => ({ ...prev, department: e.target.value }))} />
+          <Select label="Year" options={YEARS.map(y => ({ value: y, label: `${y} Year` }))} value={filters.collegeYear} onChange={e => setFilters(prev => ({ ...prev, collegeYear: e.target.value }))} />
+          <Select label="Semester" options={filterSemesterOptions.map(s => ({ value: s, label: `Sem ${s}` }))} value={filters.semester} onChange={e => setFilters(prev => ({ ...prev, semester: e.target.value }))} />
+          <Select label="Division" options={DIVISIONS.map(d => ({ value: d, label: d }))} value={filters.division} onChange={e => setFilters(prev => ({ ...prev, division: e.target.value }))} />
+        </div>
+        <div className="flex justify-end mb-3">
+          <Button variant="danger" onClick={deleteFiltered} disabled={filteredGroups.length === 0}>Delete Filtered Groups</Button>
+        </div>
+        <div className="table-wrapper">
+          <table className="admin-table">
+            <thead>
+              <tr>
+                <th>Group No</th>
+                <th>Leader</th>
+                <th>Department</th>
+                <th>Year</th>
+                <th>Semester</th>
+                <th>Division</th>
+                <th>Size</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredGroups.length > 0 ? filteredGroups.map(g => (
+                <tr key={g.id}>
+                  <td>{g.groupNo ?? '-'}</td>
+                  <td>{g.groupLeader}</td>
+                  <td>{g.department}</td>
+                  <td>{g.collegeYear || '-'}</td>
+                  <td>{g.semester || '-'}</td>
+                  <td>{g.division}</td>
+                  <td>{g.groupSize}</td>
+                  <td>
+                    <button onClick={() => deleteGroup(g.id)} className="text-red-600 hover:bg-red-50 p-2 rounded">
+                      <Trash2 size={16} />
+                    </button>
+                  </td>
+                </tr>
+              )) : (
+                <tr><td colSpan={8} className="text-center">No groups found.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+    </div>
   );
 };
 
-const MarksManager = ({ onSuccess }) => {
+const MarksManager = ({ onSuccess, refreshKey }) => {
   const [filterDept, setFilterDept] = useState('');
   const [filterDiv, setFilterDiv] = useState('');
   const [data, setData] = useState([]);
+  const [allUsers, setAllUsers] = useState([]);
 
   useEffect(() => {
     const fetchData = async () => {
-      const [marks, assignments, submissions, groups, projects] = await Promise.all([
-         ApiService.getMarks(),
-         ApiService.getAssignments(),
-         ApiService.getSubmissions(),
-         ApiService.getGroups(),
-         ApiService.getProjects()
+      const [marks, assignments, submissions, groups, projects, users] = await Promise.all([
+         ApiService.getMarks({ force: true }),
+         ApiService.getAssignments({ force: true }),
+         ApiService.getSubmissions({ force: true }),
+         ApiService.getGroups({ force: true }),
+         ApiService.getProjects({ force: true }),
+         ApiService.getUsers({ force: true })
       ]);
+      setAllUsers(users || []);
 
-      let combined = marks.map(m => {
+      const assignmentByPair = new Map((assignments || []).map((a) => [`${a.groupId}::${a.projectId}`, a]));
+      const groupById = new Map((groups || []).map((g) => [g.id, g]));
+      const projectById = new Map((projects || []).map((p) => [p.id, p]));
+      const teacherIds = new Set((users || []).filter((u) => u.role === 'TEACHER').map((u) => u.id));
+
+      const isMarkValid = (m) => {
+        const group = groupById.get(m.groupId);
+        const assignment = assignmentByPair.get(`${m.groupId}::${m.projectId}`);
+        const project = projectById.get(m.projectId);
+        const guideId = project?.guideId;
+        return !!group && !!assignment && !!project && !!guideId && teacherIds.has(guideId);
+      };
+
+      const staleMarks = (marks || []).filter((m) => !isMarkValid(m));
+      if (staleMarks.length > 0) {
+        await Promise.allSettled(staleMarks.map((m) => ApiService.deleteMark(m.id)));
+      }
+
+      const latestMarks = staleMarks.length > 0 ? await ApiService.getMarks({ force: true }) : (marks || []);
+      const validMarks = latestMarks.filter(isMarkValid);
+
+      const combined = validMarks.map(m => {
         const assignment = assignments.find(a => a.projectId === m.projectId && a.groupId === m.groupId);
         const group = groups.find(g => g.id === m.groupId);
         const project = projects.find(p => p.id === m.projectId);
         const submission = submissions.find(s => s.assignmentId === assignment?.id);
+        const guide = (users || []).find(u => u.id === project?.guideId);
     
         return {
            ...m,
+           groupMembers: group?.members || [],
            groupLeader: group?.groupLeader,
-           projectTitle: project?.title,
+           groupNo: group?.groupNo,
+           assignedProjectTitle: project?.title,
+           studentProjectName: submission?.topicName || '',
            division: group?.division,
            department: group?.department,
-           studentLink: submission?.link || submission?.fileName || ''
+           studentLink: submission?.link || '',
+           studentFile: submission?.fileName || '',
+           guideTeacherName: guide?.fullName || '-'
         };
       });
       setData(combined);
     };
     fetchData();
-  }, []);
+  }, [refreshKey]);
 
   const filteredData = data.filter(d => {
      if(filterDept && d.department !== filterDept) return false;
@@ -583,10 +703,28 @@ const MarksManager = ({ onSuccess }) => {
   const exportData = () => {
      if(filteredData.length === 0) return alert("No data to export");
      
-     const headers = ["Group Leader", "Department", "Division", "Project", "Teacher Marks", "Admin Marks", "Rubrics"];
-     const rows = filteredData.map(d => [
-       d.groupLeader, d.department, d.division, d.projectTitle, d.teacherMarks, d.adminMarks, `"${d.rubrics || ''}"`
-     ]);
+     const usersByUsername = new Map(allUsers.map(u => [u.username, u]));
+     const headers = ["PRN", "Student Name", "Department", "Division", "Group No", "Assigned Project Title", "Student Project Name", "Teacher Marks", "Admin Marks", "Rubrics", "Guide Teacher"];
+     const rows = [];
+     filteredData.forEach(d => {
+       const members = Array.isArray(d.groupMembers) && d.groupMembers.length > 0 ? d.groupMembers : [d.groupLeader];
+       members.forEach(username => {
+         const u = usersByUsername.get(username);
+         rows.push([
+           u?.prn || '',
+           u?.fullName || username || '',
+           d.department || '',
+           d.division || '',
+           d.groupNo ?? '',
+           d.assignedProjectTitle || '',
+           d.studentProjectName || '',
+           d.teacherMarks ?? '',
+           d.adminMarks ?? '',
+           `"${d.rubrics || ''}"`,
+           d.guideTeacherName || '-'
+         ]);
+       });
+     });
 
      const csvContent = [
        headers.join(','),
@@ -632,8 +770,11 @@ const MarksManager = ({ onSuccess }) => {
            <thead>
              <tr>
                <th>Group Leader</th>
-               <th>Project</th>
+               <th>Group No</th>
+               <th>Assigned Project</th>
+               <th>Student Project Name</th>
                <th>Link</th>
+               <th>Guide Teacher</th>
                <th>Teacher Marks</th>
                <th>Rubrics/Comments</th>
                <th>Admin Marks</th>
@@ -644,32 +785,41 @@ const MarksManager = ({ onSuccess }) => {
              {filteredData.map((row) => (
                <tr key={row.id}>
                  <td className="font-medium">{row.groupLeader}</td>
-                 <td>{row.projectTitle}</td>
+                 <td className="text-center">{row.groupNo ?? '-'}</td>
+                 <td>{row.assignedProjectTitle}</td>
+                 <td>{row.studentProjectName || '-'}</td>
                  <td className="min-w-[150px]">
-                    <div className="flex flex-col gap-1">
-                      {row.studentLink && (
-                        <span className="text-xs text-indigo-600 truncate max-w-[150px] inline-block" title={row.studentLink}>
-                           {row.studentLink}
-                        </span>
-                      )}
-                      <input 
-                         type="text"
-                         className="ui-input"
-                         style={{fontSize: '0.75rem', padding: '0.25rem'}}
-                         placeholder="Project URL..."
-                         defaultValue={row.projectLink}
-                         onBlur={(e) => handleUpdate(row.id, { projectLink: e.target.value })}
-                      />
-                    </div>
+                    {row.studentLink ? (
+                      <a href={row.studentLink} target="_blank" className="text-xs text-indigo-600 underline break-all">{row.studentLink}</a>
+                    ) : (
+                      <span className="text-xs text-gray-400">{row.studentFile || '-'}</span>
+                    )}
                  </td>
+                 <td>{row.guideTeacherName}</td>
                  <td className="text-indigo-600 font-bold text-center">{row.teacherMarks || '-'}</td>
                  <td className="text-xs">{row.rubrics || 'No rubrics'}</td>
                  <td>
                    <input 
-                      type="number" 
-                      className="ui-input w-20 text-center font-bold" 
-                      defaultValue={row.adminMarks} 
-                      onBlur={(e) => handleUpdate(row.id, { adminMarks: parseInt(e.target.value) })}
+                      type="text"
+                      id={`admin_mark_${row.id}`}
+                      name={`admin_mark_${row.id}`}
+                      className="ui-input w-28 text-center font-bold"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      defaultValue={row.adminMarks}
+                      onWheel={(e) => e.currentTarget.blur()}
+                      onPaste={(e) => e.preventDefault()}
+                      onDrop={(e) => e.preventDefault()}
+                      onKeyDown={(e) => {
+                        const allowed = ['Backspace', 'Delete', 'Tab', 'ArrowLeft', 'ArrowRight', 'Home', 'End'];
+                        if (allowed.includes(e.key)) return;
+                        if (/^[0-9]$/.test(e.key)) return;
+                        e.preventDefault();
+                      }}
+                      onChange={(e) => {
+                        e.target.value = e.target.value.replace(/[^0-9]/g, '');
+                      }}
+                      onBlur={(e) => handleUpdate(row.id, { adminMarks: parseInt(e.target.value, 10) })}
                    />
                  </td>
                  <td>
@@ -699,8 +849,11 @@ const AddProjectForm = ({ onSuccess, adminId }) => {
   const addRubric = () => {
     const title = rubricDraft.title.trim();
     const maxMarks = parseInt(rubricDraft.maxMarks, 10);
+    const totalMarks = parseInt(formData.totalMarks, 10);
+    if (!Number.isFinite(totalMarks) || totalMarks <= 0) return alert('Enter Total Marks before adding rubrics.');
     if (!title) return alert('Rubric title is required.');
     if (!Number.isFinite(maxMarks) || maxMarks <= 0) return alert('Rubric marks must be greater than 0.');
+    if ((rubricTotal + maxMarks) > totalMarks) return alert(`Rubric sum cannot exceed total marks (${totalMarks}).`);
     setRubrics(prev => [...prev, { id: `rb${Date.now()}${Math.random().toString(36).slice(2, 6)}`, title, maxMarks }]);
     setRubricDraft({ title: '', maxMarks: '' });
   };
@@ -739,8 +892,10 @@ const AddProjectForm = ({ onSuccess, adminId }) => {
           required 
         />
         <div className="w-full">
-          <label className="ui-label">Description</label>
+          <label className="ui-label" htmlFor="project_description">Description</label>
           <textarea 
+            id="project_description"
+            name="project_description"
             className="ui-input"
             rows={3}
             value={formData.description}
@@ -839,60 +994,76 @@ const AddProjectForm = ({ onSuccess, adminId }) => {
   );
 };
 
-const AssignProjectForm = ({ projects, groups, teachers, adminId, onSuccess }) => {
+const AssignProjectForm = ({ projects, groups, teachers, assignments, adminId, onSuccess }) => {
   const [selectedProject, setSelectedProject] = useState('');
   const [selectedGroup, setSelectedGroup] = useState('');
   const [selectedGuide, setSelectedGuide] = useState('');
+  const [filters, setFilters] = useState({ department: '', division: '', semester: '' });
 
+  const assignedGroupIdsForProject = new Set(
+    (assignments || []).filter(a => a.projectId === selectedProject).map(a => a.groupId)
+  );
+  const selectableGroups = groups.filter(g => {
+    if (filters.department && g.department !== filters.department) return false;
+    if (filters.division && g.division !== filters.division) return false;
+    if (filters.semester && String(g.semester || '') !== String(filters.semester)) return false;
+    if (selectedProject && assignedGroupIdsForProject.has(g.id)) return false;
+    return true;
+  });
+  const selectableProjects = projects.filter(p => !filters.department || p.department === filters.department);
   const groupDetails = groups.find(g => g.id === selectedGroup);
+
+  useEffect(() => {
+    if (selectedGroup && !selectableGroups.some(g => g.id === selectedGroup)) setSelectedGroup('');
+  }, [selectedGroup, selectableGroups]);
+
+  useEffect(() => {
+    if (selectedProject && !selectableProjects.some(p => p.id === selectedProject)) setSelectedProject('');
+  }, [selectedProject, selectableProjects]);
 
   const handleAssign = async (e) => {
     e.preventDefault();
     if (!selectedProject || !selectedGroup || !selectedGuide) return;
 
-    const assignments = await ApiService.getAssignments();
-    const existing = assignments.find(a => a.projectId === selectedProject && a.groupId === selectedGroup);
-    if(existing) {
-        alert("This project is already assigned to this group.");
-        return;
-    }
+    const existing = (assignments || []).find(a => a.projectId === selectedProject && a.groupId === selectedGroup);
+    if (existing) return alert('This project is already assigned to this group.');
 
     const selectedProjectData = projects.find(p => p.id === selectedProject);
     if (!selectedProjectData) return alert('Selected project not found.');
-    await ApiService.updateProject(selectedProject, {
-      ...selectedProjectData,
-      guideId: selectedGuide
-    });
+    await ApiService.updateProject(selectedProject, { ...selectedProjectData, guideId: selectedGuide });
 
-    const assignment = {
+    await ApiService.assignProject({
       id: `a${Date.now()}`,
       projectId: selectedProject,
       groupId: selectedGroup,
       assignedBy: adminId,
       status: 'ASSIGNED',
       assignedDate: new Date().toISOString()
-    };
-    await ApiService.assignProject(assignment);
-    setSelectedProject('');
+    });
     setSelectedGroup('');
-    setSelectedGuide('');
     onSuccess('Project assigned to group successfully!');
   };
 
   return (
-    <Card title="Assign Project to Group" className="max-w-2xl mx-auto">
+    <Card title="Assign Project to Group" className="max-w-3xl mx-auto">
       <form onSubmit={handleAssign} className="space-y-6">
-        <Select 
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <Select label="Department" options={DEPARTMENTS.map(d => ({ value: d, label: d }))} value={filters.department} onChange={e => setFilters(prev => ({ ...prev, department: e.target.value }))} />
+          <Select label="Division" options={DIVISIONS.map(d => ({ value: d, label: d }))} value={filters.division} onChange={e => setFilters(prev => ({ ...prev, division: e.target.value }))} />
+          <Select label="Semester" options={SEMESTERS.map(s => ({ value: s, label: `Sem ${s}` }))} value={filters.semester} onChange={e => setFilters(prev => ({ ...prev, semester: e.target.value }))} />
+        </div>
+
+        <Select
           label="Select Project"
-          options={projects.map(p => ({ value: p.id, label: `${p.title} (${p.department})` }))}
+          options={selectableProjects.map(p => ({ value: p.id, label: `${p.title} (${p.department})` }))}
           value={selectedProject}
           onChange={e => setSelectedProject(e.target.value)}
           required
         />
-        
-        <Select 
+
+        <Select
           label="Select Student Group"
-          options={groups.map(g => ({ value: g.id, label: `Leader: ${g.groupLeader} - Div ${g.division}` }))}
+          options={selectableGroups.map(g => ({ value: g.id, label: `Group ${g.groupNo ?? '-'} | Leader: ${g.groupLeader} | ${g.department} | Sem ${g.semester || '-'} | Div ${g.division}` }))}
           value={selectedGroup}
           onChange={e => setSelectedGroup(e.target.value)}
           required
@@ -909,10 +1080,13 @@ const AssignProjectForm = ({ projects, groups, teachers, adminId, onSuccess }) =
         {groupDetails && (
           <div className="bg-indigo-50 dark:bg-indigo-900/20 p-4 rounded-lg border border-indigo-100 dark:border-indigo-800">
             <h4 className="text-sm font-semibold text-indigo-800 dark:text-indigo-300 mb-2">Selected Group Details</h4>
-            <div className="grid grid-cols-2 gap-4 text-sm text-gray-600 dark:text-gray-300">
+            <div className="grid grid-cols-2 gap-4 text-sm text-gray-800 dark:text-gray-300">
+              <p><strong>Group No:</strong> {groupDetails.groupNo ?? '-'}</p>
               <p><strong>Leader:</strong> {groupDetails.groupLeader}</p>
               <p><strong>Department:</strong> {groupDetails.department}</p>
               <p><strong>Division:</strong> {groupDetails.division}</p>
+              <p><strong>Semester:</strong> {groupDetails.semester || '-'}</p>
+              <p><strong>Year:</strong> {groupDetails.collegeYear || '-'}</p>
               <p><strong>Size:</strong> {groupDetails.groupSize} Students</p>
             </div>
           </div>
@@ -927,27 +1101,50 @@ const AssignProjectForm = ({ projects, groups, teachers, adminId, onSuccess }) =
 };
 
 const ViewGuidesTable = ({ assignments, groups, projects, teachers }) => {
+  const [filters, setFilters] = useState({ guideId: '', department: '', division: '', semester: '', projectId: '' });
   const data = assignments.map((a) => {
     const group = groups.find((g) => g.id === a.groupId);
     const project = projects.find((p) => p.id === a.projectId);
     const guide = teachers.find((t) => t.id === project?.guideId);
     return {
       id: a.id,
+      groupNo: group?.groupNo,
       leader: group?.groupLeader || 'Unknown',
+      guideId: guide?.id || '',
       guideName: guide?.fullName || 'Unassigned',
+      projectId: project?.id || '',
       projectTitle: project?.title || 'Unknown',
-      dept: project?.department
+      dept: group?.department || project?.department || '-',
+      division: group?.division || '-',
+      semester: group?.semester || '-'
     };
+  }).filter(item => {
+    if (filters.guideId && item.guideId !== filters.guideId) return false;
+    if (filters.department && item.dept !== filters.department) return false;
+    if (filters.division && item.division !== filters.division) return false;
+    if (filters.semester && String(item.semester) !== String(filters.semester)) return false;
+    if (filters.projectId && item.projectId !== filters.projectId) return false;
+    return true;
   });
 
   return (
     <Card title="View Guides Allocation">
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-3 mb-4">
+        <Select label="Guide" options={teachers.map(t => ({ value: t.id, label: t.fullName }))} value={filters.guideId} onChange={e => setFilters(prev => ({ ...prev, guideId: e.target.value }))} />
+        <Select label="Department" options={DEPARTMENTS.map(d => ({ value: d, label: d }))} value={filters.department} onChange={e => setFilters(prev => ({ ...prev, department: e.target.value }))} />
+        <Select label="Division" options={DIVISIONS.map(d => ({ value: d, label: d }))} value={filters.division} onChange={e => setFilters(prev => ({ ...prev, division: e.target.value }))} />
+        <Select label="Semester" options={SEMESTERS.map(s => ({ value: s, label: `Sem ${s}` }))} value={filters.semester} onChange={e => setFilters(prev => ({ ...prev, semester: e.target.value }))} />
+        <Select label="Project" options={projects.map(p => ({ value: p.id, label: p.title }))} value={filters.projectId} onChange={e => setFilters(prev => ({ ...prev, projectId: e.target.value }))} />
+      </div>
       <div className="table-wrapper">
         <table className="admin-table">
           <thead>
             <tr>
+              <th>Group No</th>
               <th>Group Leader</th>
               <th>Department</th>
+              <th>Division</th>
+              <th>Semester</th>
               <th>Project</th>
               <th>Assigned Guide</th>
             </tr>
@@ -955,13 +1152,16 @@ const ViewGuidesTable = ({ assignments, groups, projects, teachers }) => {
           <tbody>
             {data.length > 0 ? data.map((item) => (
               <tr key={item.id}>
-                <td className="font-medium text-gray-900 dark:text-white">{item.leader}</td>
+                <td>{item.groupNo ?? '-'}</td>
+                <td className="font-medium text-black">{item.leader}</td>
                 <td>{item.dept}</td>
+                <td>{item.division}</td>
+                <td>{item.semester}</td>
                 <td>{item.projectTitle}</td>
-                <td className="text-indigo-600 dark:text-indigo-400 font-medium">{item.guideName}</td>
+                <td className="text-indigo-700 font-medium">{item.guideName}</td>
               </tr>
             )) : (
-              <tr><td colSpan={4} className="text-center">No assignments found.</td></tr>
+              <tr><td colSpan={7} className="text-center">No assignments found.</td></tr>
             )}
           </tbody>
         </table>
@@ -971,16 +1171,28 @@ const ViewGuidesTable = ({ assignments, groups, projects, teachers }) => {
 };
 
 const ViewAssignmentsList = ({ assignments, groups, projects, onSuccess }) => {
-   const data = assignments.map((a) => {
+  const [filters, setFilters] = useState({ department: '', division: '', semester: '', projectId: '' });
+  const data = assignments.map((a) => {
     const group = groups.find((g) => g.id === a.groupId);
     const project = projects.find((p) => p.id === a.projectId);
     return {
       id: a.id,
-      projectTitle: project?.title,
-      group: group ? `Leader: ${group.groupLeader} (Div ${group.division})` : 'Unknown Group',
+      projectId: project?.id || '',
+      projectTitle: project?.title || 'Unknown',
+      department: group?.department || project?.department || '-',
+      division: group?.division || '-',
+      semester: group?.semester || '-',
+      groupNo: group?.groupNo,
+      group: group ? `Group ${group.groupNo ?? '-'} | Leader: ${group.groupLeader} (Div ${group.division})` : 'Unknown Group',
       status: a.status,
       dueDate: project?.dueDate
     };
+  }).filter(item => {
+    if (filters.department && item.department !== filters.department) return false;
+    if (filters.division && item.division !== filters.division) return false;
+    if (filters.semester && String(item.semester) !== String(filters.semester)) return false;
+    if (filters.projectId && item.projectId !== filters.projectId) return false;
+    return true;
   });
 
   const deleteAssigned = async (id) => {
@@ -991,11 +1203,21 @@ const ViewAssignmentsList = ({ assignments, groups, projects, onSuccess }) => {
 
   return (
     <Card title="All Project Assignments">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4">
+        <Select label="Department" options={DEPARTMENTS.map(d => ({ value: d, label: d }))} value={filters.department} onChange={e => setFilters(prev => ({ ...prev, department: e.target.value }))} />
+        <Select label="Division" options={DIVISIONS.map(d => ({ value: d, label: d }))} value={filters.division} onChange={e => setFilters(prev => ({ ...prev, division: e.target.value }))} />
+        <Select label="Semester" options={SEMESTERS.map(s => ({ value: s, label: `Sem ${s}` }))} value={filters.semester} onChange={e => setFilters(prev => ({ ...prev, semester: e.target.value }))} />
+        <Select label="Project" options={projects.map(p => ({ value: p.id, label: p.title }))} value={filters.projectId} onChange={e => setFilters(prev => ({ ...prev, projectId: e.target.value }))} />
+      </div>
        <div className="table-wrapper">
         <table className="admin-table">
           <thead>
             <tr>
               <th>Project Title</th>
+              <th>Department</th>
+              <th>Division</th>
+              <th>Semester</th>
+              <th>Group No</th>
               <th>Assigned Group</th>
               <th>Due Date</th>
               <th>Status</th>
@@ -1006,6 +1228,10 @@ const ViewAssignmentsList = ({ assignments, groups, projects, onSuccess }) => {
              {data.length > 0 ? data.map((item) => (
               <tr key={item.id}>
                 <td className="font-medium">{item.projectTitle}</td>
+                <td>{item.department}</td>
+                <td>{item.division}</td>
+                <td>{item.semester}</td>
+                <td>{item.groupNo ?? '-'}</td>
                 <td>{item.group}</td>
                 <td>{item.dueDate}</td>
                 <td>
@@ -1018,7 +1244,7 @@ const ViewAssignmentsList = ({ assignments, groups, projects, onSuccess }) => {
                 </td>
               </tr>
             )) : (
-               <tr><td colSpan={5} className="text-center">No active assignments.</td></tr>
+               <tr><td colSpan={9} className="text-center">No active assignments.</td></tr>
             )}
           </tbody>
         </table>
@@ -1029,47 +1255,68 @@ const ViewAssignmentsList = ({ assignments, groups, projects, onSuccess }) => {
 
 const SubmittedProjectsList = ({ assignments, groups, projects }) => {
   const [submissions, setSubmissions] = useState([]);
+  const [filters, setFilters] = useState({ status: 'SUBMITTED', department: '', semester: '', division: '' });
 
   useEffect(() => {
     ApiService.getSubmissions().then(setSubmissions);
-  }, []);
+  }, [assignments]);
   
-  const data = submissions.map((sub) => {
-    const assignment = assignments.find((a) => a.id === sub.assignmentId);
+  const data = assignments.map((assignment) => {
+    const sub = submissions.find(s => s.assignmentId === assignment.id);
     const project = projects.find((p) => p.id === assignment?.projectId);
     const group = groups.find((g) => g.id === assignment?.groupId);
-    
     return {
-      id: sub.id,
-      project: project?.title,
-      groupLeader: group?.groupLeader,
-      date: sub.submissionDate,
-      file: sub.fileName || 'No File',
-      link: sub.link,
-      grade: sub.grade || 'Pending'
+      id: assignment.id,
+      project: project?.title || 'Unknown Project',
+      groupNo: group?.groupNo,
+      groupLeader: group?.groupLeader || 'Unknown',
+      department: group?.department || project?.department || '-',
+      semester: group?.semester || '-',
+      division: group?.division || '-',
+      date: sub?.submissionDate || '',
+      file: sub?.fileName || 'No File',
+      link: sub?.link || '',
+      grade: sub?.grade || 'Pending',
+      status: sub ? 'SUBMITTED' : 'NOT_SUBMITTED'
     };
+  }).filter(item => {
+    if (filters.status && item.status !== filters.status) return false;
+    if (filters.department && item.department !== filters.department) return false;
+    if (filters.semester && String(item.semester) !== String(filters.semester)) return false;
+    if (filters.division && item.division !== filters.division) return false;
+    return true;
   });
 
   return (
-    <Card title="Submitted Projects">
+    <Card title="Project Submission Status">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4">
+        <Select label="Status" options={[{ value: 'SUBMITTED', label: 'Submitted' }, { value: 'NOT_SUBMITTED', label: 'Not Submitted' }]} value={filters.status} onChange={e => setFilters(prev => ({ ...prev, status: e.target.value }))} />
+        <Select label="Department" options={DEPARTMENTS.map(d => ({ value: d, label: d }))} value={filters.department} onChange={e => setFilters(prev => ({ ...prev, department: e.target.value }))} />
+        <Select label="Semester" options={SEMESTERS.map(s => ({ value: s, label: `Sem ${s}` }))} value={filters.semester} onChange={e => setFilters(prev => ({ ...prev, semester: e.target.value }))} />
+        <Select label="Division" options={DIVISIONS.map(d => ({ value: d, label: d }))} value={filters.division} onChange={e => setFilters(prev => ({ ...prev, division: e.target.value }))} />
+      </div>
        <div className="grid gap-4">
          {data.length > 0 ? data.map((item) => (
            <div key={item.id} className="p-4 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">
              <div className="flex justify-between items-start">
                <div>
                  <h4 className="font-semibold text-lg text-indigo-600 dark:text-indigo-400">{item.project}</h4>
-                 <p className="text-sm text-gray-600 dark:text-gray-400">Submitted by: <span className="font-medium">{item.groupLeader}</span></p>
+                 <p className="text-sm text-gray-600 dark:text-gray-400">Group {item.groupNo ?? '-'} | Leader: <span className="font-medium">{item.groupLeader}</span> | {item.department} | Sem {item.semester} | Div {item.division}</p>
                </div>
-               <Badge color={item.grade === 'Pending' ? 'yellow' : 'green'}>{item.grade}</Badge>
+               <Badge color={item.status === 'SUBMITTED' ? 'green' : 'yellow'}>{item.status === 'SUBMITTED' ? item.grade : 'Not Submitted'}</Badge>
              </div>
-             <div className="mt-3 flex flex-col gap-2 text-sm text-gray-500">
-               {item.file !== 'No File' && <span className="flex items-center gap-1"><FileText size={16}/> {item.file}</span>}
-               {item.link && <a href={item.link} target="_blank" className="flex items-center gap-1 text-indigo-500 hover:underline"><CheckCircle size={16}/> {item.link}</a>}
-               <span className="flex items-center gap-1 text-xs text-gray-400">{new Date(item.date).toLocaleDateString()}</span>
-             </div>
+             {item.status === 'SUBMITTED' ? (
+               <div className="mt-3 flex flex-col gap-2 text-sm text-gray-500">
+                 {item.file !== 'No File' && <span className="flex items-center gap-1"><FileText size={16}/> {item.file}</span>}
+                 {item.link && <a href={item.link} target="_blank" className="flex items-center gap-1 text-indigo-500 hover:underline"><CheckCircle size={16}/> {item.link}</a>}
+                 {item.date && <span className="flex items-center gap-1 text-xs text-gray-400">{new Date(item.date).toLocaleDateString()}</span>}
+               </div>
+             ) : (
+               <div className="mt-3 text-sm text-gray-500">No submission uploaded yet.</div>
+             )}
            </div>
          )) : (
-            <div className="text-center py-10 text-gray-500">No submissions yet.</div>
+            <div className="text-center py-10 text-gray-500">No records found.</div>
          )}
        </div>
     </Card>
@@ -1183,7 +1430,10 @@ const ChatMonitor = ({ teachers, adminUser }) => {
          setChats(allChats.filter(c => c.targetId === selectedGroup && c.targetType === 'GROUP'));
       };
       fetchChats();
-      const interval = setInterval(fetchChats, 2000);
+      const interval = setInterval(() => {
+        if (document.visibilityState !== 'visible') return;
+        fetchChats();
+      }, 4000);
       return () => clearInterval(interval);
     }
   }, [selectedGroup]);
@@ -1237,15 +1487,15 @@ const ChatMonitor = ({ teachers, adminUser }) => {
         {selectedGroup ? (
           <div className="flex-1 overflow-y-auto overflow-x-hidden space-y-4 p-2 bg-gray-50 dark:bg-gray-800 rounded-lg">
              {chats.length > 0 ? chats.map(c => (
-               <div key={c.id} className={`p-3 rounded-lg max-w-[80%] group relative ${c.senderId === selectedTeacher ? 'bg-indigo-100 dark:bg-indigo-900 text-gray-900 dark:text-gray-100 ml-auto' : 'bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 mr-auto'}`}>
+               <div key={c.id} className={`p-3 rounded-lg max-w-[80%] group relative ${c.senderId === selectedTeacher ? 'bg-indigo-100 text-black ml-auto' : 'bg-white text-black mr-auto'}`}>
                   <div className="flex justify-between items-center gap-2">
-                    <div className="text-xs font-bold text-gray-600 dark:text-gray-300 mb-1">{c.senderName}</div>
+                    <div className="text-xs font-bold text-gray-700 mb-1">{c.senderName}</div>
                     <button onClick={() => deleteMessage(c.id)} className="text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity">
                       <Trash2 size={12} />
                     </button>
                   </div>
-                  <div className="text-sm text-gray-900 dark:text-gray-100">{c.message}</div>
-                  <div className="text-[10px] text-gray-400 dark:text-gray-500 text-right mt-1">{new Date(c.timestamp).toLocaleString()}</div>
+                  <div className="text-sm text-black">{c.message}</div>
+                  <div className="text-[10px] text-gray-500 text-right mt-1">{new Date(c.timestamp).toLocaleString()}</div>
                </div>
              )) : <div className="text-center text-gray-400 mt-10">No messages yet.</div>}
              <div ref={bottomRef} />
@@ -1257,3 +1507,8 @@ const ChatMonitor = ({ teachers, adminUser }) => {
     </div>
   );
 };
+
+
+
+
+

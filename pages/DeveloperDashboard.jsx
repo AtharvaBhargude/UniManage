@@ -4,8 +4,12 @@ import { Card, Badge, Button, Input, Select } from '../components/UI.jsx';
 import { ApiService } from '../services/api.js';
 import { DEPARTMENTS, DIVISIONS } from '../constants.js';
 import { 
-  Server, Activity, Users, BarChart, Lock, UserPlus, Trash2, Database, TrendingUp
+  Server, Activity, Users, BarChart, Lock, UserPlus, Trash2, Database, TrendingUp, Bug
 } from 'lucide-react';
+
+const devReportsCacheKey = 'dev_reports_cache_v1';
+const devStorageCacheKey = 'dev_storage_cache_v1';
+const devTopUsersCacheKey = 'dev_top_users_cache_v1';
 
 export const DeveloperDashboard = ({ user, onLogout }) => {
   const [activeTab, setActiveTab] = useState('METRICS');
@@ -28,16 +32,64 @@ export const DeveloperDashboard = ({ user, onLogout }) => {
           <button onClick={() => setActiveTab('TOP_USERS')} className={`dev-nav-item ${activeTab === 'TOP_USERS' ? 'active' : ''}`}>
              <TrendingUp size={18} className="inline mr-2 mb-1" /> Top Users
           </button>
+          <button onClick={() => setActiveTab('REPORTS')} className={`dev-nav-item ${activeTab === 'REPORTS' ? 'active' : ''}`}>
+             <Bug size={18} className="inline mr-2 mb-1" /> Reports
+          </button>
        </div>
 
-       <div className="animate-fadeIn">
+       <div className="animate-fadeIn developer-data-text">
          {activeTab === 'METRICS' && <SystemMetrics />}
          {activeTab === 'USERS' && <DeveloperUserControl />}
          {activeTab === 'ONLINE' && <OnlineUsersMonitor />}
          {activeTab === 'STORAGE' && <StorageAnalysis />}
          {activeTab === 'TOP_USERS' && <TopUsersAnalytics />}
+         {activeTab === 'REPORTS' && <ReportsPanel />}
        </div>
     </Layout>
+  );
+};
+
+const ReportsPanel = () => {
+  const [reports, setReports] = useState([]);
+  const load = async () => {
+    const rows = await ApiService.getReports();
+    const next = (rows || []).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    setReports(next);
+    localStorage.setItem(devReportsCacheKey, JSON.stringify({ rows: next, fetchedAt: new Date().toISOString() }));
+  };
+
+  useEffect(() => {
+    try {
+      const cached = JSON.parse(localStorage.getItem(devReportsCacheKey) || '{}');
+      if (Array.isArray(cached.rows)) setReports(cached.rows);
+    } catch (_) {}
+    load();
+  }, []);
+
+  const clearAll = async () => {
+    if (!window.confirm('Delete all reports?')) return;
+    await ApiService.deleteAllReports();
+    localStorage.removeItem(devReportsCacheKey);
+    load();
+  };
+
+  return (
+    <Card title="New Reports">
+      <div className="flex justify-end mb-3">
+        <Button variant="danger" onClick={clearAll} disabled={reports.length === 0}>Delete All Reports</Button>
+      </div>
+      <div className="space-y-3 text-black">
+        {reports.map(r => (
+          <div key={r.id} className="p-3 border rounded-lg">
+            <div className="text-sm font-semibold">{r.userName} ({r.userRole}) - {r.department || 'N/A'}</div>
+            <div className="text-xs text-gray-500 mb-2">{new Date(r.createdAt).toLocaleString()}</div>
+            <div className="text-sm"><span className="font-semibold">Glitch:</span> {r.glitch}</div>
+            <div className="text-sm"><span className="font-semibold">Suggestion:</span> {r.suggestion || '-'}</div>
+          </div>
+        ))}
+        {reports.length === 0 && <div className="text-center text-gray-500 py-8">No reports yet.</div>}
+      </div>
+    </Card>
   );
 };
 
@@ -45,7 +97,15 @@ const StorageAnalysis = () => {
   const [stats, setStats] = useState(null);
 
   useEffect(() => {
-    ApiService.getStorageStats().then(setStats);
+    try {
+      const cached = JSON.parse(localStorage.getItem(devStorageCacheKey) || '{}');
+      if (cached.stats) setStats(cached.stats);
+    } catch (_) {}
+
+    ApiService.getStorageStats().then((next) => {
+      setStats(next);
+      localStorage.setItem(devStorageCacheKey, JSON.stringify({ stats: next, fetchedAt: new Date().toISOString() }));
+    });
   }, []);
 
   if (!stats) return <div>Loading storage stats...</div>;
@@ -80,9 +140,9 @@ const StorageAnalysis = () => {
                { label: 'Tests & Results', value: stats.testData, color: 'bg-red-500' },
              ].map((item, i) => (
                <div key={i}>
-                  <div className="flex justify-between text-sm font-medium mb-1">
-                     <span>{item.label}</span>
-                     <span>{formatBytes(item.value)}</span>
+                  <div className="flex justify-between text-sm font-medium mb-1 text-black">
+                     <span className="text-black">{item.label}</span>
+                     <span className="text-black">{formatBytes(item.value)}</span>
                   </div>
                   <div className="w-full bg-gray-200 rounded-full h-2.5">
                      <div className={`h-2.5 rounded-full ${item.color}`} style={{ width: getPercentage(item.value) }}></div>
@@ -99,7 +159,16 @@ const TopUsersAnalytics = () => {
   const [users, setUsers] = useState([]);
 
   useEffect(() => {
-    ApiService.getUserMetrics().then(setUsers);
+    try {
+      const cached = JSON.parse(localStorage.getItem(devTopUsersCacheKey) || '{}');
+      if (Array.isArray(cached.rows)) setUsers(cached.rows);
+    } catch (_) {}
+
+    ApiService.getUserMetrics().then((rows) => {
+      const next = rows || [];
+      setUsers(next);
+      localStorage.setItem(devTopUsersCacheKey, JSON.stringify({ rows: next, fetchedAt: new Date().toISOString() }));
+    });
   }, []);
 
   return (
@@ -108,15 +177,15 @@ const TopUsersAnalytics = () => {
           <table className="w-full text-sm text-left">
              <thead className="bg-gray-50 uppercase dark:text-black">
                 <tr>
-                   <th className="px-6 py-3">Rank</th>
-                   <th className="px-6 py-3">User</th>
-                   <th className="px-6 py-3">Role</th>
-                   <th className="px-6 py-3">Requests (Month)</th>
+                   <th className="px-6 py-3 dark:text-black">Rank</th>
+                   <th className="px-6 py-3 dark:text-black">User</th>
+                   <th className="px-6 py-3 dark:text-black">Role</th>
+                   <th className="px-6 py-3 dark:text-black">Requests (Month)</th>
                 </tr>
              </thead>
              <tbody className="divide-y">
                 {users.map((u, i) => (
-                   <tr key={u.id} className="hover:bg-gray-50 dark:hover:bg-white dark:hover:text-black">
+                   <tr key={u.id} className="hover:bg-gray-50">
                       <td className="px-6 py-4 font-bold text-gray-500">#{i + 1}</td>
                       <td className="px-6 py-4">
                          <div className="font-bold">{u.fullName}</div>
@@ -165,9 +234,9 @@ const SystemMetrics = () => {
              <table className="w-full text-sm text-left">
                <thead className="bg-gray-50 text-gray-700 uppercase dark:text-black">
                  <tr>
-                    <th className="px-6 py-3">Route</th>
-                    <th className="px-6 py-3">Method</th>
-                    <th className="px-6 py-3">Hits</th>
+                    <th className="px-6 py-3 dark:text-black">Route</th>
+                    <th className="px-6 py-3 dark:text-black">Method</th>
+                    <th className="px-6 py-3 dark:text-black">Hits</th>
                  </tr>
                </thead>
                <tbody className="divide-y">
@@ -257,11 +326,11 @@ const DeveloperUserControl = () => {
                 <table className="w-full text-sm text-left">
                    <thead className="bg-gray-50 uppercase sticky top-0 dark:text-black">
                       <tr>
-                         <th className="px-4 py-2">Name</th>
-                         <th className="px-4 py-2">Role</th>
-                         <th className="px-4 py-2">Dept</th>
-                         <th className="px-4 py-2">Div</th>
-                         <th className="px-4 py-2">Action</th>
+                         <th className="px-4 py-2 dark:text-black">Name</th>
+                         <th className="px-4 py-2 dark:text-black">Role</th>
+                         <th className="px-4 py-2 dark:text-black">Dept</th>
+                         <th className="px-4 py-2 dark:text-black">Div</th>
+                         <th className="px-4 py-2 dark:text-black">Action</th>
                       </tr>
                    </thead>
                    <tbody className="divide-y">
@@ -294,7 +363,10 @@ const OnlineUsersMonitor = () => {
   useEffect(() => {
     const poll = () => ApiService.getOnlineUsers().then(setOnline);
     poll();
-    const interval = setInterval(poll, 5000);
+    const interval = setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      poll();
+    }, 12000);
     return () => clearInterval(interval);
   }, []);
 
@@ -304,7 +376,7 @@ const OnlineUsersMonitor = () => {
           {online.map(u => (
              <div key={u._id} className="p-4 border rounded-lg bg-white shadow-sm flex items-center justify-between">
                 <div>
-                   <div className="font-bold dark:text-black">{u.fullName}</div>
+                   <div className="font-bold">{u.fullName}</div>
                    <div className="text-xs text-gray-500">{u.username} | {u.role}</div>
                 </div>
                 <div className="status-badge status-online">

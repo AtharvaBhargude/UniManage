@@ -2,13 +2,17 @@ import React, { useEffect, useState, useRef } from 'react';
 import { Layout } from '../components/Layout.jsx';
 import { Card, Button, Input, Badge, Select } from '../components/UI.jsx';
 import { ApiService } from '../services/api.js';
-import { CheckCircle, MessageSquare, Trash2, ChevronLeft, ChevronRight, AlertTriangle, Clock, LogOut, Link, FileText, Save } from 'lucide-react';
+import { YEARS, getSemestersForYear } from '../constants.js';
+import { CheckCircle, MessageSquare, Trash2, ChevronLeft, ChevronRight, AlertTriangle, Clock, LogOut, Link, FileText, Save, CalendarDays } from 'lucide-react';
 
 const groupChatCacheKey = (groupId) => `group_chat_cache_${groupId}`;
 const groupChatSyncKey = (groupId) => `group_chat_sync_${groupId}`;
 const classroomChatCacheKey = (groupId) => `classroom_chat_cache_${groupId}`;
 const classroomChatSyncKey = (groupId) => `classroom_chat_sync_${groupId}`;
 const classroomSeenKey = (userId, groupId) => `student_group_seen_${userId}_${groupId}`;
+const studentTimetableCacheKey = (userId) => `student_timetable_cache_${userId}`;
+const studentGroupsCacheKey = (userId) => `student_groups_cache_${userId}`;
+const studentProjectCacheKey = (userId) => `student_project_cache_${userId}`;
 const mergeChatsById = (existing, incoming) => {
   const map = new Map(existing.map(c => [c.id, c]));
   incoming.forEach(c => map.set(c.id, c));
@@ -22,11 +26,30 @@ const latestTimestamp = (items) => {
   if (!items || items.length === 0) return '';
   return items[items.length - 1].timestamp || '';
 };
+const TIMETABLE_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+const TIMETABLE_SLOT_HOURS = [9, 10, 11, 12, 13, 14, 15, 16];
+const formatHour12 = (hour24) => {
+  const period = hour24 >= 12 ? 'PM' : 'AM';
+  const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
+  return `${hour12}:00 ${period}`;
+};
+const TIMETABLE_SLOTS = TIMETABLE_SLOT_HOURS.map(h => `${formatHour12(h)} - ${formatHour12(h + 1)}`);
+const keyForSlot = (day, slotIndex) => `${day}|${slotIndex}`;
+const createSlotGrid = (entries = []) => {
+  const grid = {};
+  entries.forEach(entry => {
+    for (let i = 0; i < (entry.duration || 1); i++) {
+      grid[keyForSlot(entry.day, entry.slotIndex + i)] = { ...entry, isContinuation: i > 0 };
+    }
+  });
+  return grid;
+};
 
 export const StudentDashboard = ({ user, onLogout, onUserUpdate }) => {
   const [activeTab, setActiveTab] = useState('PROJECT');
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [profileData, setProfileData] = useState({ collegeYear: '', semester: '' });
+  const semesterOptions = getSemestersForYear(profileData.collegeYear);
 
   useEffect(() => {
     setProfileData({
@@ -41,6 +64,14 @@ export const StudentDashboard = ({ user, onLogout, onUserUpdate }) => {
        setShowProfileModal(true);
     }
   }, [user.collegeYear, user.semester, user.role]);
+
+  useEffect(() => {
+    if (!profileData.collegeYear) return;
+    const valid = getSemestersForYear(profileData.collegeYear);
+    if (!valid.includes(String(profileData.semester))) {
+      setProfileData(prev => ({ ...prev, semester: valid[0] || '' }));
+    }
+  }, [profileData.collegeYear]);
 
   const openProfileEditor = () => {
     setProfileData({
@@ -85,7 +116,7 @@ export const StudentDashboard = ({ user, onLogout, onUserUpdate }) => {
       </div>
 
       <div className="student-tabs">
-        {['PROJECT', 'GROUPS', 'TEST'].map(tab => (
+        {['PROJECT', 'GROUPS', 'TEST', 'TIMETABLE'].map(tab => (
            <button 
              key={tab}
              onClick={() => setActiveTab(tab)}
@@ -100,6 +131,7 @@ export const StudentDashboard = ({ user, onLogout, onUserUpdate }) => {
         {activeTab === 'PROJECT' && <ProjectTab user={user} />}
         {activeTab === 'GROUPS' && <GroupsTab user={user} />}
         {activeTab === 'TEST' && <TestTab user={user} />}
+        {activeTab === 'TIMETABLE' && <StudentTimetableTab user={user} />}
         {activeTab === 'PROFILE' && <ProfileTab profileData={profileData} setProfileData={setProfileData} onSave={handleProfileUpdate} />}
       </div>
 
@@ -111,13 +143,13 @@ export const StudentDashboard = ({ user, onLogout, onUserUpdate }) => {
               <div className="space-y-3">
                  <Select 
                     label="College Year"
-                    options={['1','2','3','4'].map(y => ({value:y, label: `${y} Year`}))}
+                    options={YEARS.map(y => ({value:y, label: `${y} Year`}))}
                     value={profileData.collegeYear}
                     onChange={e => setProfileData({...profileData, collegeYear: e.target.value})}
                  />
                  <Select 
                     label="Semester"
-                    options={['1','2','3','4','5','6','7','8'].map(s => ({value:s, label: `Semester ${s}`}))}
+                    options={semesterOptions.map(s => ({value:s, label: `Semester ${s}`}))}
                     value={profileData.semester}
                     onChange={e => setProfileData({...profileData, semester: e.target.value})}
                  />
@@ -131,24 +163,104 @@ export const StudentDashboard = ({ user, onLogout, onUserUpdate }) => {
 };
 
 const ProfileTab = ({ profileData, setProfileData, onSave }) => {
+  const semesterOptions = getSemestersForYear(profileData.collegeYear);
   return (
     <Card title="Profile">
       <div className="max-w-md space-y-4">
         <p className="text-sm text-gray-500">Update your academic details.</p>
         <Select
           label="College Year"
-          options={['1', '2', '3', '4'].map(y => ({ value: y, label: `${y} Year` }))}
+          options={YEARS.map(y => ({ value: y, label: `${y} Year` }))}
           value={profileData.collegeYear}
           onChange={e => setProfileData({ ...profileData, collegeYear: e.target.value })}
         />
         <Select
           label="Semester"
-          options={['1', '2', '3', '4', '5', '6', '7', '8'].map(s => ({ value: s, label: `Semester ${s}` }))}
+          options={semesterOptions.map(s => ({ value: s, label: `Semester ${s}` }))}
           value={profileData.semester}
           onChange={e => setProfileData({ ...profileData, semester: e.target.value })}
         />
         <Button onClick={onSave}>Save Profile</Button>
       </div>
+    </Card>
+  );
+};
+
+const StudentTimetableTab = ({ user }) => {
+  const [allTimetables, setAllTimetables] = useState([]);
+
+  useEffect(() => {
+    const cacheKey = studentTimetableCacheKey(user.id);
+    try {
+      const cached = JSON.parse(localStorage.getItem(cacheKey) || '{}');
+      if (Array.isArray(cached.rows)) setAllTimetables(cached.rows);
+    } catch (_) {}
+
+    const load = async () => {
+      const rows = await ApiService.getTimetables();
+      const nextRows = rows || [];
+      setAllTimetables(nextRows);
+      localStorage.setItem(cacheKey, JSON.stringify({ rows: nextRows, fetchedAt: new Date().toISOString() }));
+    };
+
+    // Single sync on mount; avoid aggressive polling.
+    load();
+  }, [user.id]);
+
+  const timetable = allTimetables.find(tt => (
+    tt.department === user.department &&
+    String(tt.collegeYear) === String(user.collegeYear || '') &&
+    String(tt.semester) === String(user.semester || '') &&
+    tt.division === user.division
+  ));
+  const grid = createSlotGrid(timetable?.entries || []);
+  const lunchSlot = Number.isInteger(timetable?.lunchSlotIndex) ? timetable.lunchSlotIndex : 3;
+
+  return (
+    <Card title="Timetable">
+      <div className="flex items-center gap-2 text-sm text-indigo-700 mb-3">
+        <CalendarDays size={16} />
+        Showing your class only: {user.department || 'N/A'} | Year {user.collegeYear || '-'} | Sem {user.semester || '-'} | Div {user.division || '-'}
+      </div>
+
+      {timetable ? (
+        <div className="table-wrapper timetable-table-wrap">
+          <table className="w-full timetable-table">
+            <thead>
+              <tr>
+                <th>Time</th>
+                {TIMETABLE_DAYS.map(day => <th key={day}>{day}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {TIMETABLE_SLOTS.map((slot, slotIndex) => (
+                <tr key={slot}>
+                  <td className="time-col">{slot}</td>
+                  {TIMETABLE_DAYS.map(day => {
+                    const cell = grid[keyForSlot(day, slotIndex)];
+                  return (
+                      <td key={`${day}_${slotIndex}`} className="timetable-cell">
+                        {slotIndex === lunchSlot ? (
+                          <div className="tt-lunch-label">Lunch Break</div>
+                        ) : cell ? (
+                          <div className="tt-block" style={{ backgroundColor: cell.color || '#e2e8f0' }}>
+                            <div className="tt-title">{cell.subjectName}{cell.isContinuation ? ' (cont.)' : ''}</div>
+                            {!cell.isContinuation && <div className="tt-meta">{cell.teacherName} | {cell.type}</div>}
+                          </div>
+                        ) : (
+                          <span className="tt-empty">-</span>
+                        )}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="text-sm text-gray-500">No timetable assigned for your class yet.</div>
+      )}
     </Card>
   );
 };
@@ -161,6 +273,10 @@ const ProjectTab = ({ user }) => {
   const [submission, setSubmission] = useState(null);
   const [fileUrl, setFileUrl] = useState('');
   const [fileName, setFileName] = useState('');
+  const [topicName, setTopicName] = useState('');
+  const [ideaTitle, setIdeaTitle] = useState('');
+  const [ideaRecord, setIdeaRecord] = useState(null);
+  const [groupInfo, setGroupInfo] = useState(null);
   const [progress, setProgress] = useState(0);
   const [isMarksSubmitted, setIsMarksSubmitted] = useState(false);
   const [daysLeft, setDaysLeft] = useState(null);
@@ -169,43 +285,120 @@ const ProjectTab = ({ user }) => {
   const forceAutoScrollRef = useRef(true);
   const prevChatCountRef = useRef(0);
   const assignmentRef = useRef(null);
-  const pollCountRef = useRef(0);
+  const resetProjectState = (projectCacheKey) => {
+    const previousGroupId = assignmentRef.current?.groupId;
+    setMyAssignment(null);
+    assignmentRef.current = null;
+    setProject(null);
+    setChats([]);
+    setMsg('');
+    setSubmission(null);
+    setFileUrl('');
+    setFileName('');
+    setTopicName('');
+    setIdeaTitle('');
+    setIdeaRecord(null);
+    setGroupInfo(null);
+    setProgress(0);
+    setIsMarksSubmitted(false);
+    setDaysLeft(null);
+    localStorage.removeItem(projectCacheKey);
+    if (previousGroupId) {
+      localStorage.removeItem(groupChatCacheKey(previousGroupId));
+      localStorage.removeItem(groupChatSyncKey(previousGroupId));
+    }
+  };
 
   useEffect(() => {
-    const fetchData = async () => {
-      const assign = await ApiService.getAssignmentForStudent(user.username);
-      if (assign) {
-        setMyAssignment(assign);
-        assignmentRef.current = assign;
-        const proj = await ApiService.getProjectById(assign.projectId);
-        setProject(proj || null);
-        setProgress(assign.progress || 0);
-        
-        // Calculate days left
-        if (proj && proj.dueDate) {
-           const due = new Date(proj.dueDate);
-           const diff = due - new Date();
-           const days = Math.ceil(diff / (1000 * 60 * 60 * 24));
-           setDaysLeft(days);
-        }
-
-        const subs = await ApiService.getSubmissions();
-        const sub = subs.find(s => s.assignmentId === assign.id);
-        setSubmission(sub || null);
-
-        // Check if marks submitted
-        const marks = await ApiService.getMarks();
-        const markEntry = marks.find(m => m.projectId === proj.id && m.groupId === assign.groupId);
-        if (markEntry && markEntry.isSubmittedToAdmin) {
-           setIsMarksSubmitted(true);
-        }
+    const projectCacheKey = studentProjectCacheKey(user.id);
+    try {
+      const cached = JSON.parse(localStorage.getItem(projectCacheKey) || '{}');
+      if (cached.myAssignment) {
+        setMyAssignment(cached.myAssignment);
+        assignmentRef.current = cached.myAssignment;
       }
+      if (cached.project) setProject(cached.project);
+      if (cached.submission) {
+        setSubmission(cached.submission);
+        setTopicName(cached.submission.topicName || '');
+      }
+      if (cached.ideaRecord) {
+        setIdeaRecord(cached.ideaRecord);
+        setIdeaTitle(cached.ideaRecord.ideaTitle || '');
+      }
+      if (cached.groupInfo) setGroupInfo(cached.groupInfo);
+      if (typeof cached.progress === 'number') setProgress(cached.progress);
+      if (typeof cached.isMarksSubmitted === 'boolean') setIsMarksSubmitted(cached.isMarksSubmitted);
+      if (typeof cached.daysLeft === 'number') setDaysLeft(cached.daysLeft);
+    } catch (_) {}
+
+    const fetchData = async () => {
+      const assign = await ApiService.getAssignmentForStudent(user.username, { force: true });
+      if (!assign) {
+        resetProjectState(projectCacheKey);
+        return;
+      }
+
+      const proj = await ApiService.getProjectById(assign.projectId);
+      if (!proj || !proj.guideId) {
+        resetProjectState(projectCacheKey);
+        return;
+      }
+
+      setMyAssignment(assign);
+      assignmentRef.current = assign;
+      setProject(proj);
+      setProgress(assign.progress || 0);
+
+      let computedDays = null;
+      if (proj.dueDate) {
+        const due = new Date(proj.dueDate);
+        const diff = due - new Date();
+        computedDays = Math.ceil(diff / (1000 * 60 * 60 * 24));
+      }
+      setDaysLeft(computedDays);
+
+      const [subs, marks, groups, ideas] = await Promise.all([
+        ApiService.getSubmissions({ force: true }),
+        ApiService.getMarks({ force: true }),
+        ApiService.getGroups({ force: true }),
+        ApiService.getProjectIdeas({ force: true })
+      ]);
+      const sub = subs.find(s => s.assignmentId === assign.id);
+      setSubmission(sub || null);
+      setTopicName(sub?.topicName || '');
+
+      const idea = ideas.find(i => i.assignmentId === assign.id);
+      setIdeaRecord(idea || null);
+      setIdeaTitle(idea?.ideaTitle || '');
+
+      const group = groups.find(g => g.id === assign.groupId);
+      setGroupInfo(group || null);
+
+      const markEntry = marks.find(m => m.projectId === proj.id && m.groupId === assign.groupId);
+      const submittedToAdmin = !!(markEntry && markEntry.isSubmittedToAdmin);
+      setIsMarksSubmitted(submittedToAdmin);
+
+      localStorage.setItem(projectCacheKey, JSON.stringify({
+        myAssignment: assign,
+        project: proj,
+        submission: sub || null,
+        ideaRecord: idea || null,
+        groupInfo: group || null,
+        progress: assign.progress || 0,
+        isMarksSubmitted: submittedToAdmin,
+        daysLeft: typeof computedDays === 'number' ? computedDays : null,
+        fetchedAt: new Date().toISOString()
+      }));
     };
     fetchData();
-  }, [user.username]);
+  }, [user.id, user.username]);
 
   useEffect(() => {
-    if(!myAssignment) return;
+    if(!myAssignment) {
+      setChats([]);
+      return;
+    }
     const cacheKey = groupChatCacheKey(myAssignment.groupId);
     const syncKey = groupChatSyncKey(myAssignment.groupId);
     try {
@@ -217,16 +410,14 @@ const ProjectTab = ({ user }) => {
     } catch (_) {}
 
     const refresh = async () => {
-       pollCountRef.current += 1;
-       const isFullSync = pollCountRef.current % 10 === 0;
-       const since = isFullSync ? '' : (localStorage.getItem(syncKey) || '');
+       const since = localStorage.getItem(syncKey) || '';
        const freshChats = await ApiService.getChats({
          since: since || undefined,
          targetId: myAssignment.groupId,
          targetType: 'GROUP'
        });
        setChats(prev => {
-         const next = isFullSync ? freshChats : mergeChatsById(prev, freshChats);
+         const next = mergeChatsById(prev, freshChats);
          localStorage.setItem(cacheKey, JSON.stringify(next));
          const ts = latestTimestamp(next);
          if (ts) localStorage.setItem(syncKey, ts);
@@ -234,8 +425,6 @@ const ProjectTab = ({ user }) => {
        });
     };
     refresh();
-    const interval = setInterval(refresh, 2000);
-    return () => clearInterval(interval);
   }, [myAssignment]);
 
   // Only scroll when new messages are added, not on every refresh
@@ -256,6 +445,29 @@ const ProjectTab = ({ user }) => {
      if(!myAssignment) return;
      await ApiService.updateAssignment(myAssignment.id, { progress: parseInt(progress) });
      alert("Status Updated!");
+  };
+
+  const submitIdea = async (e) => {
+    e.preventDefault();
+    if (!myAssignment) return;
+    if (!ideaTitle.trim()) return alert("Please enter a project idea/title.");
+    const payload = {
+      id: ideaRecord?.id || `pi${Date.now()}`,
+      assignmentId: myAssignment.id,
+      groupId: myAssignment.groupId,
+      submittedBy: user.username,
+      ideaTitle: ideaTitle.trim(),
+      submittedAt: ideaRecord?.submittedAt || new Date().toISOString(),
+      status: 'PENDING'
+    };
+    if (ideaRecord?.id) {
+      const updated = await ApiService.updateProjectIdea(ideaRecord.id, { ...ideaRecord, ...payload });
+      setIdeaRecord(updated || payload);
+    } else {
+      const created = await ApiService.addProjectIdea(payload);
+      setIdeaRecord(created || payload);
+    }
+    alert("Idea submitted for review.");
   };
 
   const sendChat = async () => {
@@ -302,18 +514,28 @@ const ProjectTab = ({ user }) => {
     if (daysLeft < 0) return alert("Deadline passed. Cannot submit.");
     if(myAssignment) {
       if (!fileUrl && !fileName) return alert("Please provide a link or upload a file.");
+      if (!topicName.trim()) return alert("Please enter your project/topic name.");
       
       await ApiService.addSubmission({
         id: `s${Date.now()}`,
         assignmentId: myAssignment.id,
         submittedBy: user.username,
         submissionDate: new Date().toISOString(),
+        topicName: topicName.trim(),
         link: fileUrl,
         fileName: fileName
       });
-      setSubmission({ id: `s${Date.now()}`, submissionDate: new Date().toISOString(), link: fileUrl, fileName }); 
+      setSubmission({ id: `s${Date.now()}`, submissionDate: new Date().toISOString(), topicName: topicName.trim(), link: fileUrl, fileName }); 
       alert("Submitted!");
     }
+  };
+
+  const updateTopic = async () => {
+    if (!submission) return;
+    if (!topicName.trim()) return alert('Topic name required.');
+    const updated = await ApiService.updateSubmission(submission.id, { ...submission, topicName: topicName.trim() });
+    setSubmission(updated || { ...submission, topicName: topicName.trim() });
+    alert('Topic updated.');
   };
 
   const unsubmitProject = async () => {
@@ -348,21 +570,51 @@ const ProjectTab = ({ user }) => {
           <div className={`p-3 rounded-lg text-sm mb-4 font-semibold ${daysLeft < 0 ? 'bg-red-100 text-red-700' : 'bg-indigo-50 text-indigo-700'}`}>
              Due Date: {project.dueDate} {daysLeft < 0 && "(Overdue)"}
           </div>
+          <div className="text-sm text-gray-700 mb-4">
+            Group No: {groupInfo?.groupNo ?? '-'}
+          </div>
           
-          <div className="border-t pt-4">
-             <label className="font-semibold block mb-2">Update Project Status</label>
+           <div className="border-t pt-4">
+             <label className="font-semibold block mb-2 text-black" htmlFor="project_progress">Update Project Status</label>
              <div className="flex items-center gap-2 mb-2">
-                <input type="range" min="0" max="100" value={progress} onChange={e => setProgress(e.target.value)} className="flex-1"/>
-                <span className="font-mono w-10 text-right">{progress}%</span>
+                <input id="project_progress" name="project_progress" type="range" min="0" max="100" value={progress} onChange={e => setProgress(e.target.value)} className="flex-1"/>
+                <span className="font-mono w-10 text-right text-black">{progress}%</span>
              </div>
              <Button size="sm" variant="outline" onClick={updateProgress}><Save size={14}/> Save Status</Button>
           </div>
+        </Card>
+
+        <Card title="Idea Submission">
+          <form onSubmit={submitIdea} className="space-y-3">
+            {ideaRecord && (
+              <div className="flex items-center gap-2 text-sm">
+                <Badge color={ideaRecord.status === 'APPROVED' ? 'green' : ideaRecord.status === 'CHANGES_REQUESTED' ? 'red' : 'yellow'}>
+                  {ideaRecord.status || 'PENDING'}
+                </Badge>
+                <span className="text-gray-500">Submitted: {new Date(ideaRecord.submittedAt).toLocaleDateString()}</span>
+              </div>
+            )}
+            <Input
+              label="Project Idea / Title"
+              placeholder="Enter your idea/title for guide review"
+              value={ideaTitle}
+              onChange={e => setIdeaTitle(e.target.value)}
+            />
+            <Button type="submit" variant="secondary" className="text-black">Submit Idea</Button>
+            <div className="text-xs text-gray-500">Your guide can review this before final project submission.</div>
+          </form>
         </Card>
 
         <Card title="Submission">
           {submission ? (
              <div>
                 <div className="text-green-600 flex items-center gap-2 mb-4"><CheckCircle /> Submitted on {new Date(submission.submissionDate).toLocaleDateString()}</div>
+                <div className="mb-3">
+                  <div className="flex gap-2">
+                    <Input label="Project / Topic Name" value={topicName} onChange={e => setTopicName(e.target.value)} className="mb-0 flex-1" />
+                    {!isMarksSubmitted && <Button size="sm" variant="outline" onClick={updateTopic}>Save Topic</Button>}
+                  </div>
+                </div>
                 {!isMarksSubmitted && daysLeft >= 0 && (
                    <Button variant="danger" size="sm" onClick={unsubmitProject}>Unsubmit</Button>
                 )}
@@ -375,20 +627,22 @@ const ProjectTab = ({ user }) => {
                ) : (
                  <>
                    <div>
-                     <label className="ui-label">Project Link</label>
+                     <Input label="Project / Topic Name" placeholder="Enter selected project name/topic" value={topicName} onChange={e => setTopicName(e.target.value)} />
+                   </div>
+                   <div>
                      <div className="flex items-center gap-2">
                        <Link size={16} className="text-gray-400"/>
-                       <Input placeholder="https://..." value={fileUrl} onChange={e => setFileUrl(e.target.value)} className="mb-0" />
+                       <Input label="Project Link" placeholder="https://..." value={fileUrl} onChange={e => setFileUrl(e.target.value)} className="mb-0" />
                      </div>
                    </div>
                    
                    <div className="text-center text-sm text-gray-400">- OR -</div>
 
                    <div>
-                     <label className="ui-label">Upload File</label>
+                     <label className="ui-label" htmlFor="project_submission_file">Upload File</label>
                      <div className="flex items-center gap-2">
                        <FileText size={16} className="text-gray-400"/>
-                       <input type="file" onChange={handleFileChange} className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"/>
+                       <input id="project_submission_file" name="project_submission_file" type="file" onChange={handleFileChange} className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"/>
                      </div>
                    </div>
 
@@ -400,26 +654,36 @@ const ProjectTab = ({ user }) => {
         </Card>
       </div>
 
-      <Card title="Guide Chat" className="h-[500px] flex flex-col overflow-hidden">
-        <div ref={chatContainerRef} className="flex-1 overflow-y-auto overflow-x-hidden bg-gray-50 dark:bg-gray-800 rounded-lg p-4 space-y-3 mb-4 chat-scroll-mini">
-           {chats.map(c => (
-             <div key={c.id} className={`max-w-[80%] p-3 rounded-lg shadow-sm group relative ${c.senderId === user.id ? 'ml-auto bg-indigo-100 dark:bg-indigo-900 text-gray-900 dark:text-gray-100' : 'mr-auto bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100'}`}>
-               <div className="flex justify-between items-start gap-2">
-                 <div className="text-xs font-bold text-gray-600 dark:text-gray-300 mb-1">{c.senderName}</div>
-                 {c.senderId === user.id && (
-                    <button onClick={() => deleteMessage(c.id)} className="text-gray-500 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity">
+      <Card title="Guide Chat">
+        <div ref={chatContainerRef} className="space-y-2 h-[240px] overflow-y-auto rounded border p-2 bg-gray-50 chat-scroll-mini">
+          {chats.map((c) => (
+            <div
+              key={c.id}
+              className={`max-w-[82%] p-2 rounded border group ${c.senderId === user.id ? 'ml-auto bg-indigo-100 border-indigo-200 text-black' : 'mr-auto bg-white border-gray-200 text-black'}`}
+            >
+              <div className="flex justify-between items-center mb-1 gap-3">
+                <span className="font-bold text-black text-xs">{c.senderName}</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-black/70">{new Date(c.timestamp).toLocaleString()}</span>
+                  {c.senderId === user.id && (
+                    <button
+                      onClick={() => deleteMessage(c.id)}
+                      className="text-gray-500 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity"
+                      title="Delete message"
+                    >
                       <Trash2 size={12} />
                     </button>
-                 )}
-               </div>
-               {c.message && <div>{c.message}</div>}
-               <div className="text-[10px] text-gray-400 dark:text-gray-500 text-right">{new Date(c.timestamp).toLocaleTimeString()}</div>
-             </div>
-           ))}
-           <div ref={bottomRef} />
+                  )}
+                </div>
+              </div>
+              <div className="text-sm">{c.message}</div>
+            </div>
+          ))}
+          {chats.length === 0 && <div className="text-center text-gray-500 py-6">No messages yet.</div>}
+          <div ref={bottomRef} />
         </div>
-        <div className="flex gap-2">
-          <Input placeholder="Ask your guide..." value={msg} onChange={e => setMsg(e.target.value)} className="flex-1" />
+        <div className="flex gap-2 mt-2">
+          <Input placeholder="Ask your guide..." value={msg} onChange={e => setMsg(e.target.value)} className="mb-0 flex-1" />
           <Button onClick={sendChat}><MessageSquare size={18} /></Button>
         </div>
       </Card>
@@ -432,18 +696,33 @@ const GroupsTab = ({ user }) => {
   const [joinKey, setJoinKey] = useState('');
   const [activeGroup, setActiveGroup] = useState(null);
   const [activeMessages, setActiveMessages] = useState([]);
+  const [groupMessage, setGroupMessage] = useState('');
   const [unreadMap, setUnreadMap] = useState({});
   const bottomRef = useRef(null);
   const chatContainerRef = useRef(null);
   const forceAutoScrollRef = useRef(true);
   const prevMessageCountRef = useRef(0);
-  const activePollCountRef = useRef(0);
 
   useEffect(() => {
+    const cacheKey = studentGroupsCacheKey(user.id);
+    try {
+      const cached = JSON.parse(localStorage.getItem(cacheKey) || '[]');
+      if (Array.isArray(cached)) setJoinedGroups(cached);
+    } catch (_) {}
     fetchMyGroups();
-    const interval = setInterval(fetchMyGroups, 7000);
-    return () => clearInterval(interval);
-  }, []);
+  }, [user.id]);
+
+  useEffect(() => {
+    if (!activeGroup?.id) return;
+    let tick = 0;
+    const t = setInterval(async () => {
+      if (document.visibilityState !== 'visible') return;
+      tick += 1;
+      await syncActiveGroupMessages(activeGroup.id, true);
+      if (tick % 3 === 0) await fetchMyGroups();
+    }, 4000);
+    return () => clearInterval(t);
+  }, [activeGroup?.id]);
 
   // Only scroll when new messages are added, not on every refresh
   useEffect(() => {
@@ -499,6 +778,7 @@ const GroupsTab = ({ user }) => {
     }
     setUnreadMap(unread);
     setJoinedGroups(orderedGroups);
+    localStorage.setItem(studentGroupsCacheKey(user.id), JSON.stringify(orderedGroups));
   };
 
   const syncActiveGroupMessages = async (groupId, forceFull = false) => {
@@ -520,7 +800,6 @@ const GroupsTab = ({ user }) => {
   const openGroup = async (g) => {
     setActiveGroup(g);
     forceAutoScrollRef.current = true;
-    activePollCountRef.current = 0;
     const cacheKey = classroomChatCacheKey(g.id);
     try {
       const cached = JSON.parse(localStorage.getItem(cacheKey) || '[]');
@@ -528,18 +807,8 @@ const GroupsTab = ({ user }) => {
     } catch (_) {
       setActiveMessages([]);
     }
-    await syncActiveGroupMessages(g.id, false);
+    await syncActiveGroupMessages(g.id, true);
   };
-
-  useEffect(() => {
-    if (!activeGroup?.id) return;
-    const poll = async () => {
-      activePollCountRef.current += 1;
-      await syncActiveGroupMessages(activeGroup.id, activePollCountRef.current % 12 === 0);
-    };
-    const interval = setInterval(poll, 2000);
-    return () => clearInterval(interval);
-  }, [activeGroup?.id]);
 
   const joinGroup = async () => {
     const all = await ApiService.getClassroomGroups();
@@ -567,6 +836,54 @@ const GroupsTab = ({ user }) => {
     setActiveGroup(null);
   };
 
+  const sendGroupMessage = async () => {
+    const text = groupMessage.trim();
+    if (!activeGroup?.id || !text) return;
+
+    const msgData = {
+      id: `cm${Date.now()}`,
+      senderId: user.id,
+      senderName: user.fullName,
+      role: 'STUDENT',
+      message: text,
+      fileName: '',
+      fileType: '',
+      fileData: '',
+      timestamp: new Date().toISOString()
+    };
+
+    await ApiService.addClassroomGroupMessage(activeGroup.id, msgData);
+    const cacheKey = classroomChatCacheKey(activeGroup.id);
+    const syncKey = classroomChatSyncKey(activeGroup.id);
+    setActiveMessages(prev => {
+      const next = mergeChatsById(prev, [msgData]);
+      localStorage.setItem(cacheKey, JSON.stringify(next));
+      const ts = latestTimestamp(next);
+      if (ts) localStorage.setItem(syncKey, ts);
+      localStorage.setItem(classroomSeenKey(user.id, activeGroup.id), ts || '');
+      return next;
+    });
+    setGroupMessage('');
+    forceAutoScrollRef.current = true;
+    fetchMyGroups();
+  };
+
+  const deleteGroupMessage = async (messageId) => {
+    if (!activeGroup?.id) return;
+    await ApiService.deleteClassroomGroupMessage(activeGroup.id, messageId, user.id);
+    const cacheKey = classroomChatCacheKey(activeGroup.id);
+    const syncKey = classroomChatSyncKey(activeGroup.id);
+    setActiveMessages(prev => {
+      const next = prev.filter(m => m.id !== messageId);
+      localStorage.setItem(cacheKey, JSON.stringify(next));
+      const ts = latestTimestamp(next);
+      if (ts) localStorage.setItem(syncKey, ts);
+      else localStorage.removeItem(syncKey);
+      localStorage.setItem(classroomSeenKey(user.id, activeGroup.id), ts || '');
+      return next;
+    });
+  };
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
       <Card title="My Groups">
@@ -578,14 +895,14 @@ const GroupsTab = ({ user }) => {
            {joinedGroups.map(g => (
              <div
                key={g.id}
-               className="group p-3 border rounded cursor-pointer transition-colors hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-white dark:hover:text-black"
+               className="group p-3 border rounded cursor-pointer transition-colors hover:bg-gray-50 text-black"
                onClick={() => openGroup(g)}
              >
                 <div className="font-bold flex items-center justify-between">
-                  <span className="dark:group-hover:text-black">{g.name}</span>
+                  <span className="text-black">{g.name}</span>
                   {unreadMap[g.id] && <span className="w-2.5 h-2.5 rounded-full bg-red-500"></span>}
                 </div>
-                <div className="text-xs text-gray-500 dark:text-gray-400 dark:group-hover:text-black">Teacher: {g.teacherName}</div>
+                <div className="text-xs text-gray-600">Teacher: {g.teacherName}</div>
              </div>
            ))}
          </div>
@@ -595,17 +912,28 @@ const GroupsTab = ({ user }) => {
         {activeGroup ? (
            <Card title={activeGroup.name}>
               <div className="flex justify-between items-center mb-4 border-b pb-2">
-                 <span>Teacher Announcements</span>
+                 <span className="text-black">Group Chat</span>
                  <Button variant="danger" size="sm" onClick={() => leaveGroup(activeGroup)}><LogOut size={16}/> Leave</Button>
               </div>
-              <div ref={chatContainerRef} className="space-y-3 h-[420px] overflow-y-auto chat-scroll-mini">
+              <div ref={chatContainerRef} className="space-y-2 h-[240px] overflow-y-auto rounded border p-2 bg-gray-50 chat-scroll-mini">
                  {activeMessages.length > 0 ? activeMessages.map((m) => (
-                   <div key={m.id || m.timestamp} className="bg-indigo-50 p-3 rounded border border-indigo-100 text-black">
-                      <div className="flex justify-between mb-1">
-                        <span className="font-bold text-black">{m.senderName}</span>
-                        <span className="text-xs text-black/70">{new Date(m.timestamp).toLocaleString()}</span>
+                   <div key={m.id || m.timestamp} className={`max-w-[82%] p-2 rounded border group ${m.senderId === user.id ? 'ml-auto bg-indigo-100 border-indigo-200 text-black' : 'mr-auto bg-white border-gray-200 text-black'}`}>
+                      <div className="flex justify-between items-center mb-1 gap-3">
+                        <span className="font-bold text-black text-xs">{m.senderName}</span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] text-black/70">{new Date(m.timestamp).toLocaleString()}</span>
+                          {m.senderId === user.id && (
+                            <button
+                              onClick={() => deleteGroupMessage(m.id)}
+                              className="text-gray-500 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity"
+                              title="Delete message"
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          )}
+                        </div>
                       </div>
-                      {m.message && <p className="text-black">{m.message}</p>}
+                      {m.message && <div className="text-sm">{m.message}</div>}
                       {m.fileData && m.fileName && (
                         <a
                           href={m.fileData}
@@ -619,9 +947,14 @@ const GroupsTab = ({ user }) => {
                  )) : <p className="text-center text-gray-400">No messages yet.</p>}
                  <div ref={bottomRef} />
               </div>
-              {/* No Input for Students */}
-              <div className="p-2 bg-gray-100 text-xs text-center text-gray-500 mt-2 rounded">
-                 Read Only Channel
+              <div className="flex gap-2 mt-2">
+                <Input
+                  placeholder="Message this group..."
+                  value={groupMessage}
+                  onChange={e => setGroupMessage(e.target.value)}
+                  className="mb-0 flex-1"
+                />
+                <Button onClick={sendGroupMessage}><MessageSquare size={18} /></Button>
               </div>
            </Card>
         ) : (
@@ -638,6 +971,7 @@ const TestTab = ({ user }) => {
   const [activeQuiz, setActiveQuiz] = useState(null);
   const [confirmingQuiz, setConfirmingQuiz] = useState(null);
   const [analysisQuiz, setAnalysisQuiz] = useState(null);
+  const [testView, setTestView] = useState('AVAILABLE');
 
   useEffect(() => {
     if (user.division && user.department) {
@@ -666,7 +1000,10 @@ const TestTab = ({ user }) => {
          setAvailableTests(fullTests);
          setAllResults(results);
       };
-      const int = setInterval(load, 5000); // Poll for new tests
+      const int = setInterval(() => {
+        if (document.visibilityState !== 'visible') return;
+        load();
+      }, 12000);
       load();
       return () => clearInterval(int);
     }
@@ -675,7 +1012,7 @@ const TestTab = ({ user }) => {
   const initiateTest = async (q) => {
     const existingResult = allResults.find(r => r.quizId === q.id && r.studentId === user.id);
     if(existingResult) {
-       openAnalysis(q);
+       openAnalysisFromResult(existingResult);
        return;
     }
     setConfirmingQuiz(q);
@@ -683,9 +1020,9 @@ const TestTab = ({ user }) => {
 
   const getMyResult = (quizId) => allResults.find(r => r.quizId === quizId && r.studentId === user.id);
 
-  const getQuizStats = (quiz) => {
-    const results = allResults.filter(r => r.quizId === quiz.id);
-    if (results.length === 0) {
+  const getQuizStatsByQuizId = (quizId) => {
+    const quizResults = allResults.filter(r => r.quizId === quizId);
+    if (quizResults.length === 0) {
       return {
         appeared: 0,
         average: 0,
@@ -694,7 +1031,7 @@ const TestTab = ({ user }) => {
         lowest: 0
       };
     }
-    const sortedScores = results.map(r => Number(r.score) || 0).sort((a, b) => a - b);
+    const sortedScores = quizResults.map(r => Number(r.score) || 0).sort((a, b) => a - b);
     const total = sortedScores.reduce((sum, n) => sum + n, 0);
     const appeared = sortedScores.length;
     const average = total / appeared;
@@ -709,14 +1046,31 @@ const TestTab = ({ user }) => {
     };
   };
 
+  const openAnalysisFromResult = (myResult) => {
+    if (!myResult?.quizId) return;
+    const quiz = availableTests.find((item) => item.id === myResult.quizId);
+    setAnalysisQuiz({
+      quizId: myResult.quizId,
+      title: myResult.quizTitle || quiz?.title || 'Test',
+      myResult,
+      stats: getQuizStatsByQuizId(myResult.quizId)
+    });
+  };
+
   const openAnalysis = (quiz) => {
     const myResult = getMyResult(quiz.id);
     if (!myResult) return;
-    setAnalysisQuiz({
-      quiz,
-      myResult,
-      stats: getQuizStats(quiz)
-    });
+    openAnalysisFromResult(myResult);
+  };
+
+  const myAnalyses = allResults
+    .filter((r) => r.studentId === user.id)
+    .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+
+  const removeMyAnalysis = async (resultId) => {
+    await ApiService.deleteQuizResult(resultId);
+    setAllResults((prev) => prev.filter((row) => row.id !== resultId));
+    if (analysisQuiz?.myResult?.id === resultId) setAnalysisQuiz(null);
   };
 
   const startTestConfirmed = () => {
@@ -730,27 +1084,62 @@ const TestTab = ({ user }) => {
 
   return (
     <>
-      <Card title="Available Tests">
-         {availableTests.length > 0 ? (
-           <div className="grid gap-4">
-             {availableTests.map(q => (
-               <div
-                 key={q.id}
-                 className="group flex justify-between items-center p-4 border rounded-lg transition-colors hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-white dark:hover:text-black"
-               >
-                <div>
-                   <h4 className="font-bold dark:group-hover:text-black">{q.title}</h4>
-                   <p className="text-sm text-gray-500 dark:text-gray-400 dark:group-hover:text-black">{q.questions.length} Questions | {q.timeLimit} Mins</p>
-                 </div>
-                 {getMyResult(q.id) ? (
-                   <Button variant="outline" onClick={() => openAnalysis(q)}>Test Analysis</Button>
-                 ) : (
-                   <Button onClick={() => initiateTest(q)}>Start Test</Button>
-                 )}
-               </div>
-             ))}
-           </div>
-         ) : <div className="text-center text-gray-400 py-10">No active tests available for your class.</div>}
+      <Card title="Tests">
+        <div className="flex border-b mb-4 overflow-x-auto">
+          {['AVAILABLE', 'ALL_TEST_ANALYSIS'].map((view) => (
+            <button
+              key={view}
+              onClick={() => setTestView(view)}
+              className={`flex-1 py-2 px-4 text-sm font-semibold ${testView === view ? 'text-indigo-600 border-b-2 border-indigo-600' : 'text-gray-600'}`}
+            >
+              {view === 'AVAILABLE' ? 'Available Tests' : 'All Test Analysis'}
+            </button>
+          ))}
+        </div>
+
+        {testView === 'AVAILABLE' && (
+          availableTests.length > 0 ? (
+            <div className="grid gap-4">
+              {availableTests.map(q => (
+                <div
+                  key={q.id}
+                  className="group flex justify-between items-center p-4 border rounded-lg transition-colors hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-white dark:hover:text-black"
+                >
+                  <div>
+                    <h4 className="font-bold text-black dark:group-hover:text-black">{q.title}</h4>
+                    <p className="text-sm text-gray-500 dark:text-gray-400 dark:group-hover:text-black">{q.questions.length} Questions | {q.timeLimit} Mins</p>
+                  </div>
+                  {getMyResult(q.id) ? (
+                    <Button variant="outline" onClick={() => openAnalysis(q)}>Test Analysis</Button>
+                  ) : (
+                    <Button onClick={() => initiateTest(q)}>Start Test</Button>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : <div className="text-center text-gray-400 py-10">No active tests available for your class.</div>
+        )}
+
+        {testView === 'ALL_TEST_ANALYSIS' && (
+          myAnalyses.length > 0 ? (
+            <div className="space-y-2">
+              {myAnalyses.map((result) => (
+                <div key={result.id} className="p-3 border rounded flex justify-between items-center text-black bg-white">
+                  <div>
+                    <div className="font-semibold">{result.quizTitle || 'Untitled Test'}</div>
+                    <div className="text-xs text-gray-500">
+                      Score: {result.score}/{result.totalQuestions} | {result.date ? new Date(result.date).toLocaleString() : '-'}
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button size="sm" variant="outline" onClick={() => openAnalysisFromResult(result)}>Open</Button>
+                    <button className="text-red-600" onClick={() => removeMyAnalysis(result.id)}><Trash2 size={14} /></button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : <div className="text-center text-gray-400 py-10">No saved test analysis yet.</div>
+        )}
       </Card>
 
       {confirmingQuiz && (
@@ -790,7 +1179,7 @@ const TestTab = ({ user }) => {
           <div className="bg-white text-black rounded-xl shadow-2xl max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto">
             <div className="flex items-start justify-between mb-4">
               <div>
-                <h3 className="text-xl font-bold">{analysisQuiz.quiz.title} - Test Analysis</h3>
+                <h3 className="text-xl font-bold">{analysisQuiz.title} - Test Analysis</h3>
                 <p className="text-sm text-gray-500">Your score: {analysisQuiz.myResult.score} / {analysisQuiz.myResult.totalQuestions}</p>
               </div>
               <Button size="sm" variant="outline" onClick={() => setAnalysisQuiz(null)}>Close</Button>
@@ -850,7 +1239,9 @@ const FullScreenQuiz = ({ quiz, user, onClose, onSubmitted }) => {
   const [answers, setAnswers] = useState({});
   const [currentQIndex, setCurrentQIndex] = useState(0);
   const [timeLeft, setTimeLeft] = useState(quiz.timeLimit * 60);
-  const [isSidebarOpen, setSidebarOpen] = useState(true);
+  const [isSidebarOpen, setSidebarOpen] = useState(() => (typeof window !== 'undefined' ? window.innerWidth >= 768 : true));
+  const [timerPos, setTimerPos] = useState({ x: 16, y: 16 });
+  const [isMobileView, setIsMobileView] = useState(() => (typeof window !== 'undefined' ? window.innerWidth < 768 : false));
   const [violationCount, setViolationCount] = useState(0);
   const [showViolationWarning, setShowViolationWarning] = useState(false);
   const [warningText, setWarningText] = useState('');
@@ -860,6 +1251,11 @@ const FullScreenQuiz = ({ quiz, user, onClose, onSubmitted }) => {
   const secretArmTimeoutRef = useRef(null);
   const secretInputArmedRef = useRef(false);
   const secretInputBufferRef = useRef('');
+  const mobileClockTapRef = useRef(0);
+  const mobileClockLastTapRef = useRef(0);
+  const draggingTimerRef = useRef(false);
+  const dragOffsetRef = useRef({ dx: 0, dy: 0 });
+  const timerPanelRef = useRef(null);
 
   const triggerWarning = (message) => {
     setWarningText(message);
@@ -897,6 +1293,7 @@ const FullScreenQuiz = ({ quiz, user, onClose, onSubmitted }) => {
       id: `r${Date.now()}`,
       quizId: quiz.id,
       quizTitle: quiz.title,
+      teacherId: quiz.createdBy,
       studentId: user.id,
       studentName: user.fullName,
       prn: user.prn,
@@ -985,6 +1382,101 @@ const FullScreenQuiz = ({ quiz, user, onClose, onSubmitted }) => {
       // Browser may block fullscreen without direct user action; keep monitoring.
     }
   };
+
+  useEffect(() => {
+    const isMobile = window.innerWidth < 768;
+    const defaultX = isMobile ? Math.max(0, window.innerWidth - 150) : Math.max(8, window.innerWidth - 190);
+    const defaultY = 8;
+    setTimerPos({ x: defaultX, y: defaultY });
+    setSidebarOpen(!isMobile);
+    setIsMobileView(isMobile);
+  }, []);
+
+  useEffect(() => {
+    const placeTimerTopRight = () => {
+      const panelRect = timerPanelRef.current?.getBoundingClientRect();
+      const panelW = panelRect?.width || (isMobileView ? 148 : 180);
+      const edgePadding = isMobileView ? 0 : 8;
+      setTimerPos({
+        x: Math.max(edgePadding, window.innerWidth - panelW - edgePadding),
+        y: 8
+      });
+    };
+    const raf = window.requestAnimationFrame(placeTimerTopRight);
+    return () => window.cancelAnimationFrame(raf);
+  }, [isMobileView]);
+
+  useEffect(() => {
+    const onResize = () => setIsMobileView(window.innerWidth < 768);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  const clampTimerPos = (x, y) => {
+    const panelRect = timerPanelRef.current?.getBoundingClientRect();
+    const panelW = panelRect?.width || 180;
+    const panelH = panelRect?.height || 78;
+    const edgePadding = isMobileView ? 0 : 8;
+    const maxX = Math.max(edgePadding, window.innerWidth - panelW - edgePadding);
+    const maxY = Math.max(edgePadding, window.innerHeight - panelH - edgePadding);
+    return {
+      x: Math.max(edgePadding, Math.min(maxX, x)),
+      y: Math.max(edgePadding, Math.min(maxY, y))
+    };
+  };
+
+  const startTimerDrag = (clientX, clientY) => {
+    draggingTimerRef.current = true;
+    dragOffsetRef.current = { dx: clientX - timerPos.x, dy: clientY - timerPos.y };
+  };
+
+  const handleMobileClockTap = (e) => {
+    e.stopPropagation();
+    if (!isMobileView || submittedRef.current) return;
+    const now = Date.now();
+    const gap = now - mobileClockLastTapRef.current;
+    if (gap > 5000) {
+      mobileClockTapRef.current = 1;
+    } else {
+      mobileClockTapRef.current += 1;
+    }
+    mobileClockLastTapRef.current = now;
+    if (mobileClockTapRef.current >= 10) {
+      setViolationTrackingEnabled(false);
+      setShowViolationWarning(false);
+      mobileClockTapRef.current = 0;
+      mobileClockLastTapRef.current = 0;
+      alert('Mobile violation checks disabled.');
+    }
+  };
+
+  const handleExamInteraction = () => {
+    if (submittedRef.current) return;
+    if (!document.fullscreenElement) {
+      requestExamFullscreen();
+    }
+  };
+
+  useEffect(() => {
+    const onMove = (e) => {
+      if (!draggingTimerRef.current) return;
+      const clientX = e.touches?.[0]?.clientX ?? e.clientX;
+      const clientY = e.touches?.[0]?.clientY ?? e.clientY;
+      const next = clampTimerPos(clientX - dragOffsetRef.current.dx, clientY - dragOffsetRef.current.dy);
+      setTimerPos(next);
+    };
+    const onEnd = () => { draggingTimerRef.current = false; };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onEnd);
+    window.addEventListener('touchmove', onMove, { passive: false });
+    window.addEventListener('touchend', onEnd);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onEnd);
+      window.removeEventListener('touchmove', onMove);
+      window.removeEventListener('touchend', onEnd);
+    };
+  }, [timerPos]);
 
   // Timer
   useEffect(() => {
@@ -1088,9 +1580,13 @@ const FullScreenQuiz = ({ quiz, user, onClose, onSubmitted }) => {
   const currentQuestion = quiz.questions[currentQIndex];
 
   return (
-    <div className="quiz-container">
+    <div
+      className="quiz-container"
+      onClick={handleExamInteraction}
+      onTouchStart={handleExamInteraction}
+    >
        {showViolationWarning && (
-         <div className="fixed top-4 left-1/2 transform -translate-x-1/2 bg-red-600 text-white px-6 py-3 rounded-full shadow-lg z-[110] flex items-center gap-3 animate-bounce">
+         <div className="fixed top-4 left-1/2 transform -translate-x-1/2 bg-red-600 text-black px-6 py-3 rounded-full shadow-lg z-[110] flex items-center gap-3 animate-bounce">
             <AlertTriangle size={24} />
             <div>
               <div className="font-bold">{warningText}</div>
@@ -1100,13 +1596,23 @@ const FullScreenQuiz = ({ quiz, user, onClose, onSubmitted }) => {
        )}
 
        {/* Fixed timer panel (always visible, not minimizable) */}
-       <div onClick={armHiddenBypassInput} className="fixed top-4 right-4 z-[105] bg-white border border-indigo-200 shadow-lg rounded-xl px-4 py-3 min-w-[160px] cursor-pointer select-none">
-         <div className="text-xs uppercase text-gray-500 font-semibold">Time Left</div>
-         <div className="flex items-center gap-2 font-mono text-xl font-bold text-indigo-700">
-            <Clock size={18} className={timeLeft < 60 ? "text-red-500" : "text-indigo-700"} />
+       <div
+         ref={timerPanelRef}
+         onClick={armHiddenBypassInput}
+         className={`quiz-timer-panel fixed z-[105] bg-white border border-indigo-200 shadow-lg rounded-xl cursor-pointer select-none ${isMobileView ? 'px-3 py-2 min-w-[132px]' : 'px-4 py-3 min-w-[160px]'}`}
+         style={{ left: `${timerPos.x}px`, top: `${timerPos.y}px` }}
+         onMouseDown={(e) => startTimerDrag(e.clientX, e.clientY)}
+         onTouchStart={(e) => {
+           if (!e.touches?.[0]) return;
+           startTimerDrag(e.touches[0].clientX, e.touches[0].clientY);
+         }}
+       >
+         <div className={`uppercase text-gray-500 font-semibold ${isMobileView ? 'text-[10px]' : 'text-xs'}`}>Time Left</div>
+         <div className={`flex items-center gap-2 font-mono font-bold text-indigo-700 ${isMobileView ? 'text-lg' : 'text-xl'}`}>
+            <Clock onClick={handleMobileClockTap} size={isMobileView ? 15 : 18} className={timeLeft < 60 ? "text-red-500" : "text-indigo-700"} />
             {formatTime(timeLeft)}
          </div>
-         <div className="text-xs text-gray-500 mt-1">Violations: {violationCount}/{MAX_VIOLATIONS}</div>
+         <div className={`${isMobileView ? 'text-[10px]' : 'text-xs'} text-gray-500 mt-1`}>Violations: {violationCount}/{MAX_VIOLATIONS}</div>
        </div>
 
        <div className={`quiz-sidebar ${isSidebarOpen ? 'mobile-expanded' : 'mobile-collapsed'}`}>
@@ -1159,7 +1665,7 @@ const FullScreenQuiz = ({ quiz, user, onClose, onSubmitted }) => {
        </div>
 
        <div className="quiz-content relative">
-          <div className="max-w-3xl mx-auto w-full flex-1 flex flex-col justify-center pt-20 md:pt-24">
+          <div className="max-w-3xl mx-auto w-full flex-1 flex flex-col justify-center pt-12 md:pt-24">
              <div className="mb-6">
                 <span className="text-gray-400 text-sm uppercase tracking-wide font-bold">Question {currentQIndex + 1}</span>
                 <h3 className="text-xl md:text-2xl font-semibold text-gray-900 mt-2">{currentQuestion.text}</h3>
