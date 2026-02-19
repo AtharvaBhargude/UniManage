@@ -13,6 +13,7 @@ export const AuthPage = ({ onLogin }) => {
   const [formData, setFormData] = useState({
     username: '',
     password: '',
+    confirmPassword: '',
     secondPassword: '', // For 2FA
     fullName: '',
     department: DEPARTMENTS[0],
@@ -20,6 +21,12 @@ export const AuthPage = ({ onLogin }) => {
     division: DIVISIONS[0],
     prn: ''
   });
+
+  // password rule regex
+  const passwordIsValid = (pw) => {
+    // at least 8 chars, one uppercase, one lowercase, one digit, one special
+    return /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*\W).{8,}$/.test(pw);
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -41,6 +48,12 @@ export const AuthPage = ({ onLogin }) => {
       } else {
         if (!formData.username || !formData.password || !formData.fullName) {
           throw new Error('All fields are required');
+        }
+        if (formData.password !== formData.confirmPassword) {
+          throw new Error('Passwords do not match');
+        }
+        if (!passwordIsValid(formData.password)) {
+          throw new Error('Password does not meet complexity requirements');
         }
         
         const newUser = {
@@ -96,13 +109,13 @@ export const AuthPage = ({ onLogin }) => {
           <div className="auth-tabs">
             <button 
               className={`auth-tab ${isLogin ? 'active' : ''}`}
-              onClick={() => setIsLogin(true)}
+              onClick={() => { setIsLogin(true); setFormData(f => ({ ...f, confirmPassword: '' })); }}
             >
               Login
             </button>
             <button 
               className={`auth-tab ${!isLogin ? 'active' : ''}`}
-              onClick={() => setIsLogin(false)}
+              onClick={() => { setIsLogin(false); setFormData(f => ({ ...f, confirmPassword: '' })); }}
             >
               Sign Up
             </button>
@@ -127,6 +140,20 @@ export const AuthPage = ({ onLogin }) => {
                 onChange={e => setFormData({...formData, password: e.target.value})}
                 required
               />
+              {!isLogin && (
+                <div className="text-xs text-gray-500 mb-2">
+                  Password must be 8+ characters, include uppercase, lowercase, number and special character.
+                </div>
+              )}
+              {!isLogin && (
+                <Input
+                  label="Confirm Password"
+                  type="password"
+                  value={formData.confirmPassword}
+                  onChange={e => setFormData({...formData, confirmPassword: e.target.value})}
+                  required
+                />
+              )}
 
               {!isLogin && (
                 <>

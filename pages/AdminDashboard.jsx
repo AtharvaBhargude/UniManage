@@ -1326,7 +1326,14 @@ const SubmittedProjectsList = ({ assignments, groups, projects }) => {
 const UsersManagement = ({ onSuccess }) => {
   const [users, setUsers] = useState([]);
   const [newUser, setNewUser] = useState({
-    username: '', password: '123', fullName: '', role: 'STUDENT', department: DEPARTMENTS[0], division: DIVISIONS[0], prn: ''
+    username: '',
+    password: '',
+    confirmPassword: '',
+    fullName: '',
+    role: 'STUDENT',
+    department: DEPARTMENTS[0],
+    division: DIVISIONS[0],
+    prn: ''
   });
   const [filterRole, setFilterRole] = useState('');
   const [filterDept, setFilterDept] = useState('');
@@ -1339,20 +1346,37 @@ const UsersManagement = ({ onSuccess }) => {
     });
   }, []);
 
+  const passwordIsValid = (pw) => /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*\W).{8,}$/.test(pw);
+
   const handleRegister = async (e) => {
     e.preventDefault();
+    if (newUser.password !== newUser.confirmPassword) {
+      return onSuccess('Passwords do not match');
+    }
+    if (!passwordIsValid(newUser.password)) {
+      return onSuccess('Password must be 8+ chars with upper, lower, number and special');
+    }
+
     const user = {
       id: `u${Date.now()}`,
-      ...newUser,
+      username: newUser.username,
+      password: newUser.password,
+      fullName: newUser.fullName,
+      role: newUser.role,
+      department: newUser.department,
       prn: newUser.role === 'STUDENT' ? newUser.prn : undefined,
       division: newUser.role === 'STUDENT' ? newUser.division : undefined
     };
-    await ApiService.register(user);
-    // Refresh list
-    const u = await ApiService.getUsers();
-    setUsers(u.filter(user => user.role !== 'DEVELOPER'));
-    onSuccess("User registered successfully");
-    setNewUser({ username: '', password: '123', fullName: '', role: 'STUDENT', department: DEPARTMENTS[0], division: DIVISIONS[0], prn: '' });
+    try {
+      await ApiService.register(user);
+      // Refresh list
+      const u = await ApiService.getUsers();
+      setUsers(u.filter(user => user.role !== 'DEVELOPER'));
+      onSuccess("User registered successfully");
+      setNewUser({ username: '', password: '', confirmPassword: '', fullName: '', role: 'STUDENT', department: DEPARTMENTS[0], division: DIVISIONS[0], prn: '' });
+    } catch (err) {
+      onSuccess(err.message || 'Registration failed');
+    }
   };
 
   const filteredUsers = users.filter(u => {

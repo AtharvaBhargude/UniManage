@@ -77,7 +77,9 @@ mongoose.connect(MONGO_URI)
     const devExists = await User.findOne({ role: 'DEVELOPER' });
     if (!devExists) {
       const salt = await bcrypt.genSalt(10);
-      const hashedPassword = await bcrypt.hash('dev123', salt);
+      // choose initial password that meets complexity rules
+      const defaultDevPwd = 'Dev123!@'; // 8+ chars w/ upper, lower, number, special
+      const hashedPassword = await bcrypt.hash(defaultDevPwd, salt);
       const hashedSecondPassword = await bcrypt.hash('secure456', salt); // 2nd Step Password
 
       await new User({
@@ -90,7 +92,7 @@ mongoose.connect(MONGO_URI)
         department: 'IT'
       }).save();
 
-      console.log('Developer account created: developer / dev123 / secure456');
+      console.log(`Developer account created: developer / ${defaultDevPwd} / secure456`);
     }
   })
   .catch(err => console.error('MongoDB connection error:', err));
@@ -131,9 +133,20 @@ const trackActivityAndMetrics = async (req, res, next) => {
 app.use(trackActivityAndMetrics);
 
 // --- Auth Routes ---
+// password policy helper
+const passwordIsValid = (pw) => {
+  // at least 8 chars, one uppercase, one lowercase, one digit, one special char
+  return /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*\W).{8,}$/.test(pw);
+};
+
 app.post('/api/auth/register', async (req, res) => {
   try {
     const { password, ...userData } = req.body;
+
+    if (!password || !passwordIsValid(password)) {
+      return res.status(400).json({ error: 'Password does not meet complexity requirements' });
+    }
+
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
     

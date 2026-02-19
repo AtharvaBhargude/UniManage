@@ -258,7 +258,14 @@ const SystemMetrics = () => {
 const DeveloperUserControl = () => {
   const [users, setUsers] = useState([]);
   const [newUser, setNewUser] = useState({
-    username: '', password: '123', fullName: '', role: 'STUDENT', department: DEPARTMENTS[0], division: DIVISIONS[0], prn: ''
+    username: '',
+    password: '',
+    confirmPassword: '',
+    fullName: '',
+    role: 'STUDENT',
+    department: DEPARTMENTS[0],
+    division: DIVISIONS[0],
+    prn: ''
   });
   const [filterRole, setFilterRole] = useState('');
   const [filterDept, setFilterDept] = useState('');
@@ -268,18 +275,35 @@ const DeveloperUserControl = () => {
 
   useEffect(() => { refreshUsers(); }, []);
 
+  const passwordIsValid = (pw) => /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*\W).{8,}$/.test(pw);
+
   const handleRegister = async (e) => {
     e.preventDefault();
+    if (newUser.password !== newUser.confirmPassword) {
+      return alert('Passwords do not match');
+    }
+    if (!passwordIsValid(newUser.password)) {
+      return alert('Password must be 8+ chars with upper, lower, number and special');
+    }
+
     const user = {
       id: `u${Date.now()}`,
-      ...newUser,
+      username: newUser.username,
+      password: newUser.password,
+      fullName: newUser.fullName,
+      role: newUser.role,
+      department: newUser.department,
       prn: newUser.role === 'STUDENT' ? newUser.prn : undefined,
       division: newUser.role === 'STUDENT' ? newUser.division : undefined
     };
-    await ApiService.register(user);
-    refreshUsers();
-    alert("User Created");
-    setNewUser({ username: '', password: '123', fullName: '', role: 'STUDENT', department: DEPARTMENTS[0], division: DIVISIONS[0], prn: '' });
+    try {
+      await ApiService.register(user);
+      refreshUsers();
+      alert("User Created");
+      setNewUser({ username: '', password: '', confirmPassword: '', fullName: '', role: 'STUDENT', department: DEPARTMENTS[0], division: DIVISIONS[0], prn: '' });
+    } catch (err) {
+      alert(err.message || 'Registration failed');
+    }
   };
 
   const handleDelete = async (id) => {
@@ -302,6 +326,11 @@ const DeveloperUserControl = () => {
              <form onSubmit={handleRegister} className="space-y-3">
                <Input label="Username" value={newUser.username} onChange={e => setNewUser({...newUser, username: e.target.value})} required />
                <Input label="Full Name" value={newUser.fullName} onChange={e => setNewUser({...newUser, fullName: e.target.value})} required />
+               <div className="text-xs text-gray-500 mb-1">
+                 Password must be 8+ characters, include uppercase, lowercase, number and special character.
+               </div>
+               <Input label="Password" type="password" value={newUser.password} onChange={e => setNewUser({...newUser, password: e.target.value})} required />
+               <Input label="Confirm Password" type="password" value={newUser.confirmPassword} onChange={e => setNewUser({...newUser, confirmPassword: e.target.value})} required />
                <Select label="Role" options={['ADMIN','TEACHER','STUDENT'].map(r=>({value:r, label:r}))} value={newUser.role} onChange={e => setNewUser({...newUser, role: e.target.value})} />
                <Select label="Department" options={DEPARTMENTS.map(d => ({value:d, label:d}))} value={newUser.department} onChange={e => setNewUser({...newUser, department: e.target.value})} />
                {newUser.role === 'STUDENT' && (
